@@ -14,6 +14,7 @@ export type Device =
   | 'CPU (rwkv.cpp)'
   | 'CUDA'
   | 'CUDA-Beta'
+  | 'CUDA High Performance'
   | 'WebGPU'
   | 'WebGPU (Python)'
   | 'MPS'

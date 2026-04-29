@@ -305,6 +305,9 @@ export const getStrategy = (
         strategy += ` *${params.storedLayers}+`
       else strategy += ` -> cuda fp16 *1`
       break
+    case 'CUDA High Performance':
+      strategy = 'albatross workers=1 batch=32'
+      break
     case 'MPS':
       if (avoidOverflow) strategy = 'mps fp32 *1 -> '
       strategy += 'mps '
