@@ -20,6 +20,7 @@ from routes.schema import (
 from utils.rwkv import *
 from utils.llama import *
 from utils.log import quick_log
+from albatross_engine.adapter import AlbatrossRWKV
 import global_var
 
 router = APIRouter()
@@ -123,6 +124,128 @@ completion_lock = Lock()
 requests_num = 0
 
 
+async def eval_albatross(
+    model: AlbatrossRWKV,
+    request: Request,
+    body: ModelConfigBody,
+    prompt: str,
+    stream: bool,
+    stop: Union[str, List[str], None],
+    stop_token_ids: Union[List[int], None],
+    chat_mode: bool,
+):
+    completion = model.generate(
+        body,
+        prompt,
+        stop=stop,
+        stop_token_ids=stop_token_ids,
+    )
+    response_type, response, prompt_tokens, completion_tokens = "text", "", 0, 0
+    aborted = False
+
+    def abort_completion():
+        nonlocal aborted
+        if not aborted:
+            aborted = True
+            completion.abort()
+
+    try:
+        for (
+            response_type,
+            response,
+            delta,
+            prompt_tokens,
+            completion_tokens,
+        ) in completion:
+            if await request.is_disconnected():
+                abort_completion()
+                break
+            if stream:
+                yield json.dumps(
+                    {
+                        "object": (
+                            "chat.completion.chunk"
+                            if chat_mode
+                            else "text_completion"
+                        ),
+                        "model": model.name,
+                        "choices": [
+                            (
+                                {
+                                    "delta": {"content": delta},
+                                    "index": 0,
+                                    "finish_reason": None,
+                                }
+                                if chat_mode
+                                else {
+                                    "text": delta,
+                                    "index": 0,
+                                    "finish_reason": None,
+                                }
+                            )
+                        ],
+                    }
+                )
+    finally:
+        if await request.is_disconnected():
+            abort_completion()
+
+    if aborted:
+        return
+
+    if stream:
+        yield json.dumps(
+            {
+                "object": "chat.completion.chunk" if chat_mode else "text_completion",
+                "model": model.name,
+                "choices": [
+                    (
+                        {
+                            "delta": {},
+                            "index": 0,
+                            "finish_reason": "stop",
+                        }
+                        if chat_mode
+                        else {
+                            "text": "",
+                            "index": 0,
+                            "finish_reason": "stop",
+                        }
+                    )
+                ],
+            }
+        )
+        yield "[DONE]"
+    elif response_type == "text":
+        yield {
+            "object": "chat.completion" if chat_mode else "text_completion",
+            "model": model.name,
+            "choices": [
+                (
+                    {
+                        "message": {
+                            "role": Role.Assistant.value,
+                            "content": response,
+                        },
+                        "index": 0,
+                        "finish_reason": "stop",
+                    }
+                    if chat_mode
+                    else {
+                        "text": response,
+                        "index": 0,
+                        "finish_reason": "stop",
+                    }
+                )
+            ],
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+            },
+        }
+
+
 async def eval(
     model: Union[AbstractRWKV, AbstractLlama],
     request: Request,
@@ -133,6 +256,20 @@ async def eval(
     stop_token_ids: Union[List[int], None],
     chat_mode: bool,
 ):
+    if isinstance(model, AlbatrossRWKV):
+        async for result in eval_albatross(
+            model,
+            request,
+            body,
+            prompt,
+            stream,
+            stop,
+            stop_token_ids,
+            chat_mode,
+        ):
+            yield result
+        return
+
     global requests_num
     requests_num = requests_num + 1
     quick_log(request, None, "Start Waiting. RequestsNum: " + str(requests_num))
