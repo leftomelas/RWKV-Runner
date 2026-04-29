@@ -60,7 +60,11 @@ if not defined VCVARS64 (
   exit /b 1
 )
 
-set "ARCH=%~1"
+if defined ALBATROSS_ARCH (
+  set "ARCH=%ALBATROSS_ARCH%"
+) else (
+  set "ARCH=%~1"
+)
 if "%ARCH%"=="" set "ARCH=auto"
 
 echo [Albatross] VS environment: "%VCVARS64%"

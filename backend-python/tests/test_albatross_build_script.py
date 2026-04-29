@@ -22,8 +22,8 @@ class AlbatrossBuildScriptTests(unittest.TestCase):
         module = load_build_script()
 
         self.assertEqual(
-            module.parse_arches("sm80,8.6,sm120"),
-            ["sm80", "sm86", "sm120"],
+            module.parse_arches("sm80,8.6,sm120,compute80"),
+            ["sm80", "sm86", "sm120", "compute80"],
         )
 
     def test_resolve_arches_auto_uses_visible_cuda_device(self):
@@ -42,16 +42,20 @@ class AlbatrossBuildScriptTests(unittest.TestCase):
         module = load_build_script()
 
         self.assertEqual(
-            module.torch_cuda_arch_list(["sm80", "sm86", "sm120"]),
-            "8.0;8.6;12.0",
+            module.torch_cuda_arch_list(["sm80", "sm86", "compute80", "sm120"]),
+            "8.0;8.6;8.0+PTX;12.0",
         )
 
     def test_cuda_gencode_flags_uses_sm_targets(self):
         module = load_build_script()
 
         self.assertEqual(
-            module.cuda_gencode_flags(["sm120"]),
-            ["-gencode=arch=compute_120,code=sm_120"],
+            module.cuda_gencode_flags(["sm80", "compute80", "sm120"]),
+            [
+                "-gencode=arch=compute_80,code=sm_80",
+                "-gencode=arch=compute_80,code=compute_80",
+                "-gencode=arch=compute_120,code=sm_120",
+            ],
         )
 
     def test_find_python310_dev_paths_uses_default_localappdata_layout(self):
@@ -130,6 +134,7 @@ class AlbatrossBuildScriptTests(unittest.TestCase):
         self.assertIn("vcvars64.bat", script)
         self.assertIn("build_albatross_kernel.py", script)
         self.assertIn("MAX_JOBS", script)
+        self.assertIn("ALBATROSS_ARCH", script)
 
 
 if __name__ == "__main__":

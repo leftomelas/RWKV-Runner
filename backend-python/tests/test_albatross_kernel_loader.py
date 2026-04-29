@@ -97,6 +97,45 @@ class AlbatrossKernelLoaderTests(unittest.TestCase):
 
             self.assertIsNone(result)
 
+    def test_find_precompiled_kernel_accepts_forward_compatible_ptx(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            library = root / "kernel.pyd"
+            library.write_text("", encoding="utf-8")
+            manifest = root / "manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "kernels": [
+                            {
+                                "name": "rwkv7_state_fwd_fp16",
+                                "torch": "2.7.1+cu128",
+                                "cuda": "12.8",
+                                "python_abi": "cp310",
+                                "platform": "win_amd64",
+                                "arch": ["sm80", "compute80"],
+                                "path": "kernel.pyd",
+                                "source": "local-build",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = find_precompiled_kernel(
+                manifest,
+                RuntimeKernelContext(
+                    torch_version="2.7.1+cu128",
+                    cuda_version="12.8",
+                    python_abi="cp310",
+                    platform_tag="win_amd64",
+                    cuda_arch="sm120",
+                ),
+            )
+
+            self.assertEqual(result, library)
+
     def test_extension_build_options_uses_python_include_and_lib_env(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

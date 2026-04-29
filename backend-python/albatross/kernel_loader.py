@@ -18,6 +18,28 @@ class RuntimeKernelContext:
     cuda_arch: str
 
 
+def _arch_digits(arch: str, prefix: str) -> int | None:
+    if not arch.startswith(prefix):
+        return None
+    digits = arch[len(prefix) :]
+    if not digits.isdigit():
+        return None
+    return int(digits)
+
+
+def _supports_runtime_arch(entry_arches: list[str], runtime_arch: str) -> bool:
+    if runtime_arch in entry_arches:
+        return True
+    runtime_digits = _arch_digits(runtime_arch, "sm")
+    if runtime_digits is None:
+        return False
+    for entry_arch in entry_arches:
+        ptx_digits = _arch_digits(entry_arch, "compute")
+        if ptx_digits is not None and ptx_digits <= runtime_digits:
+            return True
+    return False
+
+
 def find_precompiled_kernel(
     manifest_path: Path, context: RuntimeKernelContext
 ) -> Path | None:
@@ -36,7 +58,7 @@ def find_precompiled_kernel(
             continue
         if entry.get("platform") != context.platform_tag:
             continue
-        if context.cuda_arch not in entry.get("arch", []):
+        if not _supports_runtime_arch(entry.get("arch", []), context.cuda_arch):
             continue
         candidate = manifest_path.parent / entry["path"]
         if candidate.is_file():

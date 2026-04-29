@@ -30,16 +30,22 @@ def parse_arches(raw_arches: str) -> list[str]:
         arch = raw_arch.strip().lower()
         if not arch:
             continue
-        if arch.startswith("sm"):
+        if arch.startswith("compute"):
+            prefix = "compute"
+            digits = arch[len(prefix) :]
+        elif arch.startswith("sm"):
+            prefix = "sm"
             digits = arch[2:]
         elif "." in arch:
+            prefix = "sm"
             major, minor = arch.split(".", 1)
             digits = f"{major}{minor}"
         else:
+            prefix = "sm"
             digits = arch
         if not digits.isdigit() or len(digits) < 2:
             raise ValueError(f"Invalid CUDA arch: {raw_arch}")
-        normalized = f"sm{digits}"
+        normalized = f"{prefix}{digits}"
         if normalized not in arches:
             arches.append(normalized)
     if not arches:
@@ -69,16 +75,24 @@ def resolve_arches(
 def torch_cuda_arch_list(arches: list[str]) -> str:
     converted = []
     for arch in arches:
-        digits = arch[2:] if arch.startswith("sm") else arch
-        converted.append(f"{digits[:-1]}.{digits[-1]}")
+        if arch.startswith("compute"):
+            digits = arch[len("compute") :]
+            converted.append(f"{digits[:-1]}.{digits[-1]}+PTX")
+        else:
+            digits = arch[2:] if arch.startswith("sm") else arch
+            converted.append(f"{digits[:-1]}.{digits[-1]}")
     return ";".join(converted)
 
 
 def cuda_gencode_flags(arches: list[str]) -> list[str]:
     flags = []
     for arch in arches:
-        digits = arch[2:] if arch.startswith("sm") else arch
-        flags.append(f"-gencode=arch=compute_{digits},code=sm_{digits}")
+        if arch.startswith("compute"):
+            digits = arch[len("compute") :]
+            flags.append(f"-gencode=arch=compute_{digits},code=compute_{digits}")
+        else:
+            digits = arch[2:] if arch.startswith("sm") else arch
+            flags.append(f"-gencode=arch=compute_{digits},code=sm_{digits}")
     return flags
 
 
