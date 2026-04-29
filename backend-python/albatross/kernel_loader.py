@@ -1,8 +1,10 @@
 from dataclasses import dataclass
 import json
+import os
 from pathlib import Path
 import platform
 import sys
+import sysconfig
 
 import torch
 
@@ -79,3 +81,86 @@ def load_precompiled_kernel_if_available(manifest_path: Path) -> bool:
         return False
     torch.ops.load_library(str(kernel_path))
     return True
+
+
+def _split_env_paths(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [path for path in value.split(os.pathsep) if path]
+
+
+def extension_build_options(env: dict[str, str] | None = None) -> dict[str, list[str]]:
+    env = env or os.environ
+    extra_include_paths = _split_env_paths(env.get("ALBATROSS_PYTHON_INCLUDE"))
+    extra_include_paths.extend(
+        _split_env_paths(env.get("ALBATROSS_TORCH_EXTENSION_INCLUDE_PATHS"))
+    )
+
+    extra_ldflags = _split_env_paths(env.get("ALBATROSS_TORCH_EXTENSION_LDFLAGS"))
+    for lib_dir in _split_env_paths(env.get("ALBATROSS_PYTHON_LIB_DIR")):
+        if os.name == "nt":
+            extra_ldflags.append(f"/LIBPATH:{lib_dir}")
+        else:
+            extra_ldflags.append(f"-L{lib_dir}")
+
+    return {
+        "extra_include_paths": extra_include_paths,
+        "extra_ldflags": extra_ldflags,
+    }
+
+
+def validate_python_extension_build_environment(
+    env: dict[str, str] | None = None,
+    python_include_dir: Path | None = None,
+    python_lib_dir: Path | None = None,
+) -> None:
+    env = env or os.environ
+    python_include_dir = python_include_dir or Path(sysconfig.get_path("include"))
+    include_dirs = [python_include_dir]
+    include_dirs.extend(Path(path) for path in _split_env_paths(env.get("ALBATROSS_PYTHON_INCLUDE")))
+    include_dirs.extend(
+        Path(path)
+        for path in _split_env_paths(env.get("ALBATROSS_TORCH_EXTENSION_INCLUDE_PATHS"))
+    )
+
+    if any((include_dir / "Python.h").is_file() for include_dir in include_dirs):
+        if os.name != "nt":
+            return
+
+        python_lib_name = f"python{sys.version_info.major}{sys.version_info.minor}.lib"
+        lib_dirs = []
+        if python_lib_dir is not None:
+            lib_dirs.append(python_lib_dir)
+        libdir = sysconfig.get_config_var("LIBDIR")
+        if libdir:
+            lib_dirs.append(Path(libdir))
+        lib_dirs.extend(
+            [
+                Path(sys.prefix) / "libs",
+                Path(sys.base_prefix) / "libs",
+            ]
+        )
+        lib_dirs.extend(
+            Path(path) for path in _split_env_paths(env.get("ALBATROSS_PYTHON_LIB_DIR"))
+        )
+        if any((lib_dir / python_lib_name).is_file() for lib_dir in lib_dirs):
+            return
+        checked_libs = ", ".join(str(path) for path in lib_dirs)
+        raise RuntimeError(
+            "Cannot build Albatross CUDA extension because "
+            f"{python_lib_name} was not found. Checked: {checked_libs}. "
+            "Install the matching full Python distribution, then either copy its "
+            "libs directory into py310 or set ALBATROSS_PYTHON_LIB_DIR before "
+            "starting the backend."
+        )
+
+    checked = ", ".join(str(path) for path in include_dirs)
+    raise RuntimeError(
+        "Cannot build Albatross CUDA extension because Python.h was not found. "
+        f"Checked: {checked}. "
+        "RWKV Runner's bundled py310 is an embeddable Python and may not include "
+        "the CPython headers required by torch.utils.cpp_extension. Install the "
+        "matching full Python 3.10.x distribution, then either copy its Include "
+        "and libs directories into py310 or set ALBATROSS_PYTHON_INCLUDE and "
+        "ALBATROSS_PYTHON_LIB_DIR before starting the backend."
+    )

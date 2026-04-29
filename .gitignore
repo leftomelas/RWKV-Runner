@@ -23,6 +23,8 @@ __pycache__
 /backend-python/rwkv5
 /backend-python/rwkv6
 /backend-python/wkv7s
+/backend-python/rwkv7_state_fwd_fp16/
+/backend-python/rwkv7_state_fwd_fp16_build/
 /backend-python/rwkv_pip/wkv_cuda.pyd
 /backend-python/rwkv_pip/rwkv5.pyd
 /backend-python/rwkv_pip/rwkv6.pyd

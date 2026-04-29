@@ -1,9 +1,15 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
 
-from albatross.kernel_loader import RuntimeKernelContext, find_precompiled_kernel
+from albatross.kernel_loader import (
+    RuntimeKernelContext,
+    extension_build_options,
+    find_precompiled_kernel,
+    validate_python_extension_build_environment,
+)
 
 
 class AlbatrossKernelLoaderTests(unittest.TestCase):
@@ -89,6 +95,45 @@ class AlbatrossKernelLoaderTests(unittest.TestCase):
             )
 
             self.assertIsNone(result)
+
+    def test_extension_build_options_uses_python_include_and_lib_env(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            include_dir = root / "include"
+            lib_dir = root / "libs"
+            include_dir.mkdir()
+            lib_dir.mkdir()
+
+            options = extension_build_options(
+                {
+                    "ALBATROSS_PYTHON_INCLUDE": str(include_dir),
+                    "ALBATROSS_PYTHON_LIB_DIR": str(lib_dir),
+                }
+            )
+
+            self.assertIn(str(include_dir), options["extra_include_paths"])
+            if os.name == "nt":
+                self.assertIn(f"/LIBPATH:{lib_dir}", options["extra_ldflags"])
+            else:
+                self.assertIn(f"-L{lib_dir}", options["extra_ldflags"])
+
+    def test_validate_python_extension_build_environment_accepts_env_header(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            include_dir = Path(tmp) / "include"
+            include_dir.mkdir()
+            (include_dir / "Python.h").write_text("", encoding="utf-8")
+
+            validate_python_extension_build_environment(
+                {"ALBATROSS_PYTHON_INCLUDE": str(include_dir)}
+            )
+
+    def test_validate_python_extension_build_environment_reports_missing_header(self):
+        with self.assertRaisesRegex(RuntimeError, "Python.h"):
+            validate_python_extension_build_environment(
+                {},
+                python_include_dir=Path(tempfile.gettempdir())
+                / "missing-albatross-python-include",
+            )
 
 
 if __name__ == "__main__":
