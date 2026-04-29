@@ -21,6 +21,23 @@ def get_args(args: Union[Sequence[str], None] = None):
         default="127.0.0.1",
         help="host to run the server on (default: 127.0.0.1)",
     )
+    group.add_argument(
+        "--backlog",
+        type=int,
+        default=2048,
+        help="maximum pending socket connections for the API server (default: 2048)",
+    )
+    group.add_argument(
+        "--timeout-keep-alive",
+        type=int,
+        default=120,
+        help="keep-alive timeout for idle HTTP connections in seconds (default: 120)",
+    )
+    group.add_argument(
+        "--no-access-log",
+        action="store_true",
+        help="disable uvicorn per-request access logging",
+    )
     group = parser.add_argument_group(title="mode arguments")
     group.add_argument(
         "--webui",
@@ -136,4 +153,12 @@ def init():
 if __name__ == "__main__":
     os.environ["RWKV_RUNNER_PARAMS"] = " ".join(sys.argv[1:])
     print("--- %s seconds ---" % (time.time() - start_time))
-    uvicorn.run("main:app", port=args.port, host=args.host, workers=1)
+    uvicorn.run(
+        "main:app",
+        port=args.port,
+        host=args.host,
+        workers=1,
+        backlog=args.backlog,
+        timeout_keep_alive=args.timeout_keep_alive,
+        access_log=not args.no_access_log,
+    )

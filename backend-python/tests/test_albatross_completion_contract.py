@@ -51,6 +51,21 @@ class FakeAlbatross:
         return self.completion
 
 
+class FakeAsyncAlbatross:
+    name = "albatross"
+
+    def __init__(self):
+        self.async_generate_args = None
+
+    def generate(self, body, prompt, stop=None, stop_token_ids=None):
+        raise AssertionError("blocking generate should not be used")
+
+    async def async_generate(self, body, prompt, stop=None, stop_token_ids=None):
+        self.async_generate_args = (body, prompt, stop, stop_token_ids)
+        yield ("text", "Hello", "Hello", 3, 1)
+        yield ("text", "Hello async", " async", 3, 2)
+
+
 class AlbatrossCompletionContractTests(unittest.IsolatedAsyncioTestCase):
     async def test_eval_albatross_non_streaming_chat_response(self):
         body = completion.ChatCompletionBody(messages=[])
@@ -84,6 +99,19 @@ class AlbatrossCompletionContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second["choices"][0]["delta"]["content"], " world")
         self.assertEqual(final["choices"][0]["finish_reason"], "stop")
         self.assertEqual(chunks[-1], "[DONE]")
+
+    async def test_eval_albatross_prefers_async_generation_path(self):
+        body = completion.ChatCompletionBody(messages=[])
+        model = FakeAsyncAlbatross()
+
+        chunks = []
+        async for chunk in completion.eval_albatross(
+            model, FakeRequest(), body, "prompt", True, None, None, True
+        ):
+            chunks.append(chunk)
+
+        self.assertEqual(model.async_generate_args, (body, "prompt", None, None))
+        self.assertEqual(json.loads(chunks[1])["choices"][0]["delta"]["content"], " async")
 
     async def test_eval_dispatches_albatross_without_waiting_on_completion_lock(self):
         body = completion.CompletionBody(prompt="prompt")

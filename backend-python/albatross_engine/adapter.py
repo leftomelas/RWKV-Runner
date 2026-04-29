@@ -169,13 +169,12 @@ class AlbatrossRWKV(AbstractRWKV):
     def delta_postprocess(self, delta: str) -> str:
         return delta
 
-    def generate(
+    def _generation_config(
         self,
         body: ModelConfigBody,
         prompt: str,
-        stop: Union[str, List[str], None] = None,
         stop_token_ids: Union[List[int], None] = None,
-    ) -> AlbatrossCompletion:
+    ):
         temperature = body.temperature if body.temperature is not None else self.temperature
         if temperature < 0.1:
             temperature = 0.1
@@ -207,23 +206,42 @@ class AlbatrossRWKV(AbstractRWKV):
             effective_stop_tokens.extend(stop_token_ids)
         effective_stop_tokens = list(set(effective_stop_tokens))
 
+        return {
+            "temperature": temperature,
+            "top_p": top_p,
+            "top_k": top_k,
+            "presence_penalty": presence_penalty,
+            "frequency_penalty": frequency_penalty,
+            "penalty_decay": penalty_decay,
+            "max_tokens": max_tokens,
+            "stop_tokens": effective_stop_tokens,
+            "prompt_tokens": len(self._engine_core.tokenizer.encode(prompt)),
+        }
+
+    def generate(
+        self,
+        body: ModelConfigBody,
+        prompt: str,
+        stop: Union[str, List[str], None] = None,
+        stop_token_ids: Union[List[int], None] = None,
+    ) -> AlbatrossCompletion:
+        config = self._generation_config(body, prompt, stop_token_ids)
         result_queue: queue.Queue = queue.Queue()
         abort_event = threading.Event()
-        prompt_tokens = len(self._engine_core.tokenizer.encode(prompt))
         current_completion_holder = [None]
 
         async def async_completion():
             try:
                 completion = self._engine_core.completion(
                     prompt_str=prompt,
-                    temperature=temperature,
-                    top_p=top_p,
-                    top_k=top_k,
-                    presence_penalty=presence_penalty,
-                    frequency_penalty=frequency_penalty,
-                    penalty_decay=penalty_decay,
-                    max_tokens=max_tokens,
-                    stop_tokens=effective_stop_tokens,
+                    temperature=config["temperature"],
+                    top_p=config["top_p"],
+                    top_k=config["top_k"],
+                    presence_penalty=config["presence_penalty"],
+                    frequency_penalty=config["frequency_penalty"],
+                    penalty_decay=config["penalty_decay"],
+                    max_tokens=config["max_tokens"],
+                    stop_tokens=config["stop_tokens"],
                 )
                 current_completion_holder[0] = completion
                 async for event in completion:
@@ -280,7 +298,7 @@ class AlbatrossRWKV(AbstractRWKV):
                         "text",
                         response,
                         delta,
-                        prompt_tokens,
+                        config["prompt_tokens"],
                         completion_tokens,
                     )
 
@@ -292,6 +310,100 @@ class AlbatrossRWKV(AbstractRWKV):
                 raise
 
         return AlbatrossCompletion(generate_tokens(), abort_this_completion)
+
+    async def async_generate(
+        self,
+        body: ModelConfigBody,
+        prompt: str,
+        stop: Union[str, List[str], None] = None,
+        stop_token_ids: Union[List[int], None] = None,
+    ):
+        config = self._generation_config(body, prompt, stop_token_ids)
+        result_queue: asyncio.Queue = asyncio.Queue()
+        caller_loop = asyncio.get_running_loop()
+        abort_event = threading.Event()
+        current_completion_holder = [None]
+
+        def put_result(event):
+            try:
+                result_queue.put_nowait(event)
+            except asyncio.QueueFull:
+                pass
+
+        async def async_completion():
+            try:
+                completion = self._engine_core.completion(
+                    prompt_str=prompt,
+                    temperature=config["temperature"],
+                    top_p=config["top_p"],
+                    top_k=config["top_k"],
+                    presence_penalty=config["presence_penalty"],
+                    frequency_penalty=config["frequency_penalty"],
+                    penalty_decay=config["penalty_decay"],
+                    max_tokens=config["max_tokens"],
+                    stop_tokens=config["stop_tokens"],
+                )
+                current_completion_holder[0] = completion
+                async for event in completion:
+                    if abort_event.is_set():
+                        completion.abort()
+                        break
+                    caller_loop.call_soon_threadsafe(put_result, event)
+            except Exception as e:
+                caller_loop.call_soon_threadsafe(put_result, ("error", str(e)))
+            finally:
+                current_completion_holder[0] = None
+                caller_loop.call_soon_threadsafe(put_result, None)
+
+        future = asyncio.run_coroutine_threadsafe(async_completion(), self._event_loop)
+
+        def abort_this_completion():
+            abort_event.set()
+            if current_completion_holder[0]:
+                try:
+                    current_completion_holder[0].abort()
+                except Exception:
+                    pass
+
+        response = ""
+        completion_tokens = 0
+        try:
+            while True:
+                event = await result_queue.get()
+                if event is None:
+                    break
+                if event[0] == "error":
+                    raise RuntimeError(f"Albatross generation error: {event[1]}")
+                if event[0] != "token":
+                    continue
+
+                token_id, delta = event[1], event[2]
+                completion_tokens += 1
+                response += delta
+
+                should_stop = False
+                if stop:
+                    stops = [stop] if isinstance(stop, str) else stop
+                    for stop_text in stops:
+                        if stop_text in response:
+                            response = response.split(stop_text)[0]
+                            should_stop = True
+                            break
+
+                yield (
+                    "text",
+                    response,
+                    delta,
+                    config["prompt_tokens"],
+                    completion_tokens,
+                )
+
+                if should_stop:
+                    abort_this_completion()
+                    break
+        finally:
+            if not future.done():
+                abort_this_completion()
 
     def get_embedding(self, input: str, fast_mode: bool) -> Tuple[List[float], int]:
         raise NotImplementedError(

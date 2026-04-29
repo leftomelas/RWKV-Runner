@@ -38,8 +38,15 @@ class ThreadSafeAsyncQueue:
         # 在事件循环线程中执行 put，避免跨线程直接操作 asyncio.Queue
         if self.event_loop.is_closed():
             return
+
+        def safe_put_nowait():
+            try:
+                self.queue.put_nowait(item)
+            except asyncio.QueueFull:
+                pass
+
         try:
-            self.event_loop.call_soon_threadsafe(self.queue.put_nowait, item)
+            self.event_loop.call_soon_threadsafe(safe_put_nowait)
         except RuntimeError:
             # 事件循环已关闭或未运行，直接忽略
             pass

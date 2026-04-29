@@ -134,31 +134,53 @@ async def eval_albatross(
     stop_token_ids: Union[List[int], None],
     chat_mode: bool,
 ):
-    completion = model.generate(
-        body,
-        prompt,
-        stop=stop,
-        stop_token_ids=stop_token_ids,
-    )
+    async_generator = getattr(model, "async_generate", None)
+    if callable(async_generator):
+        completion = async_generator(
+            body,
+            prompt,
+            stop=stop,
+            stop_token_ids=stop_token_ids,
+        )
+        use_async_completion = True
+    else:
+        completion = model.generate(
+            body,
+            prompt,
+            stop=stop,
+            stop_token_ids=stop_token_ids,
+        )
+        use_async_completion = False
     response_type, response, prompt_tokens, completion_tokens = "text", "", 0, 0
     aborted = False
 
-    def abort_completion():
+    async def abort_completion():
         nonlocal aborted
         if not aborted:
             aborted = True
-            completion.abort()
+            if hasattr(completion, "abort"):
+                completion.abort()
+            elif hasattr(completion, "aclose"):
+                await completion.aclose()
+
+    async def iter_completion():
+        if use_async_completion:
+            async for event in completion:
+                yield event
+        else:
+            for event in completion:
+                yield event
 
     try:
-        for (
+        async for (
             response_type,
             response,
             delta,
             prompt_tokens,
             completion_tokens,
-        ) in completion:
+        ) in iter_completion():
             if await request.is_disconnected():
-                abort_completion()
+                await abort_completion()
                 break
             if stream:
                 yield json.dumps(
@@ -188,7 +210,7 @@ async def eval_albatross(
                 )
     finally:
         if await request.is_disconnected():
-            abort_completion()
+            await abort_completion()
 
     if aborted:
         return
