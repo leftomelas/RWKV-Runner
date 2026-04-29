@@ -113,6 +113,24 @@ class AlbatrossCompletionContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(model.async_generate_args, (body, "prompt", None, None))
         self.assertEqual(json.loads(chunks[1])["choices"][0]["delta"]["content"], " async")
 
+    async def test_eval_albatross_throttles_stream_disconnect_polling(self):
+        body = completion.ChatCompletionBody(messages=[])
+        events = [
+            ("text", "x" * index, "x", 3, index)
+            for index in range(1, 11)
+        ]
+        model = FakeAlbatross(events)
+        request = FakeRequest()
+
+        chunks = []
+        async for chunk in completion.eval_albatross(
+            model, request, body, "prompt", True, None, None, True
+        ):
+            chunks.append(chunk)
+
+        self.assertLessEqual(request._calls, 4)
+        self.assertEqual(chunks[-1], "[DONE]")
+
     async def test_eval_dispatches_albatross_without_waiting_on_completion_lock(self):
         body = completion.CompletionBody(prompt="prompt")
         model = FakeAlbatross()

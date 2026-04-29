@@ -58,6 +58,12 @@ class AlbatrossBuildScriptTests(unittest.TestCase):
             ],
         )
 
+    def test_arch_directory_name_joins_arches(self):
+        module = load_build_script()
+
+        self.assertEqual(module.arch_directory_name(["sm80", "compute80"]), "sm80_compute80")
+        self.assertEqual(module.arch_directory_name(["sm120"]), "sm120")
+
     def test_find_python310_dev_paths_uses_default_localappdata_layout(self):
         module = load_build_script()
         with tempfile.TemporaryDirectory() as tmp:
@@ -80,7 +86,7 @@ class AlbatrossBuildScriptTests(unittest.TestCase):
 
             self.assertEqual(result, (include_dir, lib_dir))
 
-    def test_update_manifest_replaces_matching_context(self):
+    def test_update_manifest_preserves_different_arch_context(self):
         module = load_build_script()
         with tempfile.TemporaryDirectory() as tmp:
             manifest_path = Path(tmp) / "manifest.json"
@@ -105,7 +111,38 @@ class AlbatrossBuildScriptTests(unittest.TestCase):
             module.update_manifest(manifest_path, replacement)
 
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            self.assertEqual(manifest["kernels"], [replacement])
+            self.assertEqual(manifest["kernels"], [existing, replacement])
+
+    def test_update_manifest_replaces_matching_arch_context_only(self):
+        module = load_build_script()
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path = Path(tmp) / "manifest.json"
+            sm80 = {
+                "name": "rwkv7_state_fwd_fp16",
+                "torch": "2.7.1+cu128",
+                "cuda": "12.8",
+                "python_abi": "cp310",
+                "platform": "win_amd64",
+                "arch": ["sm80", "compute80"],
+                "path": "sm80_compute80/kernel.pyd",
+                "source": "local-build",
+            }
+            sm120 = dict(sm80)
+            sm120["arch"] = ["sm120"]
+            sm120["path"] = "old-sm120/kernel.pyd"
+            replacement = dict(sm120)
+            replacement["path"] = "sm120/kernel.pyd"
+            manifest_path.write_text(
+                json.dumps({"kernels": [sm80, sm120]}),
+                encoding="utf-8",
+            )
+
+            module.update_manifest(manifest_path, replacement)
+
+            kernels = json.loads(manifest_path.read_text(encoding="utf-8"))["kernels"]
+            self.assertIn(sm80, kernels)
+            self.assertIn(replacement, kernels)
+            self.assertEqual(len(kernels), 2)
 
     def test_clear_stale_build_lock_removes_empty_lock(self):
         module = load_build_script()

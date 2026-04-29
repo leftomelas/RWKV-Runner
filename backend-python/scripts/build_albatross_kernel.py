@@ -100,6 +100,10 @@ def library_suffix() -> str:
     return ".pyd" if os.name == "nt" else ".so"
 
 
+def arch_directory_name(arches: list[str]) -> str:
+    return "_".join(arches)
+
+
 def find_built_library(build_dir: Path) -> Path:
     candidates = sorted(
         build_dir.glob(f"*{library_suffix()}"),
@@ -209,7 +213,7 @@ def update_manifest(manifest_path: Path, entry: dict) -> None:
         manifest = {"kernels": []}
 
     def same_context(candidate: dict) -> bool:
-        keys = ["name", "torch", "cuda", "python_abi", "platform"]
+        keys = ["name", "torch", "cuda", "python_abi", "platform", "arch"]
         return all(candidate.get(key) == entry.get(key) for key in keys)
 
     kernels = [
@@ -403,6 +407,7 @@ def build_kernel(args) -> Path:
         Path(f"torch-{torch.__version__}")
         / current_platform_tag()
         / current_python_abi()
+        / arch_directory_name(arches)
         / f"{KERNEL_NAME}{library_suffix()}"
     )
     output_library = output_root / relative_library

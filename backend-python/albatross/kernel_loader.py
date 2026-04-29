@@ -40,13 +40,46 @@ def _supports_runtime_arch(entry_arches: list[str], runtime_arch: str) -> bool:
     return False
 
 
+def _arch_key(entry_arches: list[str]) -> str:
+    return "_".join(entry_arches)
+
+
+def _normalize_forced_arch(forced_arch: str | None) -> str | None:
+    if not forced_arch:
+        return None
+    return forced_arch.strip().lower().replace(";", "_").replace(",", "_")
+
+
+def _arch_rank(entry_arches: list[str], runtime_arch: str) -> tuple[int, int]:
+    if runtime_arch in entry_arches:
+        return (0, 0)
+
+    best_ptx = -1
+    runtime_digits = _arch_digits(runtime_arch, "sm")
+    if runtime_digits is None:
+        return (2, 0)
+
+    for entry_arch in entry_arches:
+        ptx_digits = _arch_digits(entry_arch, "compute")
+        if ptx_digits is not None and ptx_digits <= runtime_digits:
+            best_ptx = max(best_ptx, ptx_digits)
+
+    if best_ptx >= 0:
+        return (1, -best_ptx)
+    return (2, 0)
+
+
 def find_precompiled_kernel(
-    manifest_path: Path, context: RuntimeKernelContext
+    manifest_path: Path,
+    context: RuntimeKernelContext,
+    forced_arch: str | None = None,
 ) -> Path | None:
     if not manifest_path.is_file():
         return None
 
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    forced_arch_key = _normalize_forced_arch(forced_arch)
+    candidates = []
     for entry in manifest.get("kernels", []):
         if entry.get("name") != "rwkv7_state_fwd_fp16":
             continue
@@ -58,12 +91,18 @@ def find_precompiled_kernel(
             continue
         if entry.get("platform") != context.platform_tag:
             continue
-        if not _supports_runtime_arch(entry.get("arch", []), context.cuda_arch):
+        entry_arches = entry.get("arch", [])
+        if forced_arch_key and _arch_key(entry_arches) != forced_arch_key:
+            continue
+        if not _supports_runtime_arch(entry_arches, context.cuda_arch):
             continue
         candidate = manifest_path.parent / entry["path"]
         if candidate.is_file():
-            return candidate
-    return None
+            candidates.append((_arch_rank(entry_arches, context.cuda_arch), candidate))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0])
+    return candidates[0][1]
 
 
 def current_python_abi() -> str:
@@ -98,7 +137,11 @@ def current_runtime_context() -> RuntimeKernelContext:
 def load_precompiled_kernel_if_available(manifest_path: Path) -> bool:
     if not torch.cuda.is_available():
         return False
-    kernel_path = find_precompiled_kernel(manifest_path, current_runtime_context())
+    kernel_path = find_precompiled_kernel(
+        manifest_path,
+        current_runtime_context(),
+        forced_arch=os.environ.get("ALBATROSS_KERNEL_ARCH"),
+    )
     if kernel_path is None:
         return False
     torch.ops.load_library(str(kernel_path))

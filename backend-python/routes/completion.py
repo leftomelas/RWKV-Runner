@@ -123,6 +123,12 @@ completion_lock = Lock()
 
 requests_num = 0
 
+ALBATROSS_DISCONNECT_CHECK_INTERVAL = 8
+
+
+def dumps_stream_chunk(payload: dict) -> str:
+    return json.dumps(payload, separators=(",", ":"))
+
 
 async def eval_albatross(
     model: AlbatrossRWKV,
@@ -171,6 +177,11 @@ async def eval_albatross(
             for event in completion:
                 yield event
 
+    async def should_abort_after_token(token_index: int) -> bool:
+        if token_index == 1 or token_index % ALBATROSS_DISCONNECT_CHECK_INTERVAL == 0:
+            return await request.is_disconnected()
+        return False
+
     try:
         async for (
             response_type,
@@ -179,11 +190,11 @@ async def eval_albatross(
             prompt_tokens,
             completion_tokens,
         ) in iter_completion():
-            if await request.is_disconnected():
+            if await should_abort_after_token(completion_tokens):
                 await abort_completion()
                 break
             if stream:
-                yield json.dumps(
+                yield dumps_stream_chunk(
                     {
                         "object": (
                             "chat.completion.chunk"
@@ -216,7 +227,7 @@ async def eval_albatross(
         return
 
     if stream:
-        yield json.dumps(
+        yield dumps_stream_chunk(
             {
                 "object": "chat.completion.chunk" if chat_mode else "text_completion",
                 "model": model.name,

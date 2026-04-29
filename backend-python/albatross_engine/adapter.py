@@ -323,6 +323,8 @@ class AlbatrossRWKV(AbstractRWKV):
         caller_loop = asyncio.get_running_loop()
         abort_event = threading.Event()
         current_completion_holder = [None]
+        event_buffer = []
+        first_token_sent = False
 
         def put_result(event):
             try:
@@ -330,7 +332,21 @@ class AlbatrossRWKV(AbstractRWKV):
             except asyncio.QueueFull:
                 pass
 
+        def put_results(events):
+            for event in events:
+                put_result(event)
+
+        def flush_events(force: bool = False):
+            if not event_buffer:
+                return
+            if not force and len(event_buffer) < 8:
+                return
+            events = event_buffer[:]
+            event_buffer.clear()
+            caller_loop.call_soon_threadsafe(put_results, events)
+
         async def async_completion():
+            nonlocal first_token_sent
             try:
                 completion = self._engine_core.completion(
                     prompt_str=prompt,
@@ -348,11 +364,19 @@ class AlbatrossRWKV(AbstractRWKV):
                     if abort_event.is_set():
                         completion.abort()
                         break
-                    caller_loop.call_soon_threadsafe(put_result, event)
+                    event_buffer.append(event)
+                    if event[0] != "token" or not first_token_sent:
+                        if event[0] == "token":
+                            first_token_sent = True
+                        flush_events(force=True)
+                    else:
+                        flush_events()
             except Exception as e:
+                flush_events(force=True)
                 caller_loop.call_soon_threadsafe(put_result, ("error", str(e)))
             finally:
                 current_completion_holder[0] = None
+                flush_events(force=True)
                 caller_loop.call_soon_threadsafe(put_result, None)
 
         future = asyncio.run_coroutine_threadsafe(async_completion(), self._event_loop)

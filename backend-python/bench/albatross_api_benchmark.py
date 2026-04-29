@@ -72,6 +72,52 @@ def post_stream_chat(url: str, payload: dict, timeout: float) -> dict:
         }
 
 
+def post_non_stream_chat(url: str, payload: dict, timeout: float) -> dict:
+    started = time.perf_counter()
+    data = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with NO_PROXY_OPENER.open(request, timeout=timeout) as response:
+            body = response.read().decode("utf-8", errors="replace")
+        ended = time.perf_counter()
+        event = json.loads(body)
+        usage = event.get("usage") or {}
+        message = event["choices"][0].get("message", {})
+        content = message.get("content") or event["choices"][0].get("text") or ""
+        return {
+            "ok": True,
+            "status": response.status,
+            "first_token_latency": None,
+            "wall_time": ended - started,
+            "tokens": usage.get("completion_tokens", 0),
+            "text": content,
+        }
+    except urllib.error.HTTPError as error:
+        body = error.read().decode("utf-8", errors="replace")
+        return {
+            "ok": False,
+            "status": error.code,
+            "error": body[:500],
+            "first_token_latency": None,
+            "wall_time": time.perf_counter() - started,
+            "tokens": 0,
+        }
+    except Exception as error:
+        return {
+            "ok": False,
+            "status": None,
+            "error": str(error),
+            "first_token_latency": None,
+            "wall_time": time.perf_counter() - started,
+            "tokens": 0,
+        }
+
+
 def percentile(values: list[float], pct: float) -> float:
     if not values:
         return 0.0
@@ -91,6 +137,16 @@ def main() -> int:
     parser.add_argument("--max-tokens", type=int, default=64)
     parser.add_argument("--timeout", type=float, default=600)
     parser.add_argument(
+        "--non-stream",
+        action="store_true",
+        help="use non-streaming chat completions and count usage completion_tokens",
+    )
+    parser.add_argument(
+        "--no-stop",
+        action="store_true",
+        help="disable text stop strings; EOS stop token may still end generation",
+    )
+    parser.add_argument(
         "--prompt",
         default="Write one concise paragraph about parallel language model inference.",
     )
@@ -100,17 +156,21 @@ def main() -> int:
     payload = {
         "messages": [{"role": "user", "content": args.prompt}],
         "model": "rwkv",
-        "stream": True,
+        "stream": not args.non_stream,
         "max_tokens": args.max_tokens,
         "temperature": 1,
         "top_p": 0.3,
     }
+    if args.no_stop:
+        payload["stop"] = None
+        payload["stop_token_ids"] = []
 
     started = time.perf_counter()
     results = []
+    post_chat = post_non_stream_chat if args.non_stream else post_stream_chat
     with ThreadPoolExecutor(max_workers=args.concurrency) as executor:
         futures = [
-            executor.submit(post_stream_chat, url, payload, args.timeout)
+            executor.submit(post_chat, url, payload, args.timeout)
             for _ in range(args.requests)
         ]
         for future in as_completed(futures):
