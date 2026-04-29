@@ -6,6 +6,7 @@
 
 from typing import List, Union
 import os
+from pathlib import Path
 current_path = os.path.dirname(os.path.abspath(__file__))
 
 import torch
@@ -45,15 +46,19 @@ if not ROCm_flag and torch.cuda.is_available():
 ########################################################################################################
 
 from torch.utils.cpp_extension import load
+from albatross.kernel_loader import load_precompiled_kernel_if_available
 HEAD_SIZE = 64
 
-if ROCm_flag == True:
+_KERNEL_MANIFEST = Path(__file__).parent / "kernels" / "manifest.json"
+_PRECOMPILED_LOADED = load_precompiled_kernel_if_available(_KERNEL_MANIFEST)
+
+if not _PRECOMPILED_LOADED and ROCm_flag == True:
     load(name="rwkv7_state_fwd_fp16", sources=[f"{current_path}/hip/rwkv7_state_fwd_fp16_op.hip", f"{current_path}/hip/rwkv7_state_fwd_fp16.hip"], is_python_module=False,
                     verbose=True, extra_cuda_cflags=['-fopenmp', '-ffast-math', '-O3', '-munsafe-fp-atomics', f"-D_N_={HEAD_SIZE}"])
-elif CUDA_ARCH_GE_80_FLAG == True:
+elif not _PRECOMPILED_LOADED and CUDA_ARCH_GE_80_FLAG == True:
     load(name="rwkv7_state_fwd_fp16", sources=[f"{current_path}/cuda/rwkv7_state_fwd_fp16.cpp", f"{current_path}/cuda/rwkv7_state_fwd_fp16.cu"], is_python_module=False,
                     verbose=True, extra_cuda_cflags=["-res-usage", "--use_fast_math", "-O3", "--extra-device-vectorization", f"-D_N_={HEAD_SIZE}"] + (["-Xptxas -O3"] if os.name != "nt" else []))
-else:
+elif not _PRECOMPILED_LOADED:
     load(name="rwkv7_state_fwd_fp16", sources=[f"{current_path}/cuda/sm80/rwkv7_state_fwd_fp16.cpp", f"{current_path}/cuda/sm80/rwkv7_state_fwd_fp16.cu"], is_python_module=False,
                     verbose=True, extra_cuda_cflags=["-res-usage", "--use_fast_math", "-O3", "--extra-device-vectorization", f"-D_N_={HEAD_SIZE}"] + (["-Xptxas -O3"] if os.name != "nt" else []))
 
