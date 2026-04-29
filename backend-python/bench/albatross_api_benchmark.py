@@ -7,6 +7,9 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
+NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def post_stream_chat(url: str, payload: dict, timeout: float) -> dict:
     started = time.perf_counter()
     first_token_at = None
@@ -20,7 +23,7 @@ def post_stream_chat(url: str, payload: dict, timeout: float) -> dict:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with NO_PROXY_OPENER.open(request, timeout=timeout) as response:
             for raw_line in response:
                 line = raw_line.decode("utf-8", errors="replace").strip()
                 if not line.startswith("data: "):

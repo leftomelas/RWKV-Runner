@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -120,11 +121,20 @@ class AlbatrossKernelLoaderTests(unittest.TestCase):
     def test_validate_python_extension_build_environment_accepts_env_header(self):
         with tempfile.TemporaryDirectory() as tmp:
             include_dir = Path(tmp) / "include"
+            lib_dir = Path(tmp) / "libs"
             include_dir.mkdir()
+            lib_dir.mkdir()
             (include_dir / "Python.h").write_text("", encoding="utf-8")
+            (lib_dir / f"python{sys.version_info.major}{sys.version_info.minor}.lib").write_text(
+                "",
+                encoding="utf-8",
+            )
 
             validate_python_extension_build_environment(
-                {"ALBATROSS_PYTHON_INCLUDE": str(include_dir)}
+                {
+                    "ALBATROSS_PYTHON_INCLUDE": str(include_dir),
+                    "ALBATROSS_PYTHON_LIB_DIR": str(lib_dir),
+                }
             )
 
     def test_validate_python_extension_build_environment_reports_missing_header(self):

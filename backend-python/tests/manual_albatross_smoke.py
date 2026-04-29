@@ -5,6 +5,9 @@ import urllib.error
 import urllib.request
 
 
+NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def api_url(host: str, port: int, path: str) -> str:
     return f"http://{host}:{port}{path}"
 
@@ -18,7 +21,7 @@ def post_json(url: str, payload: dict, timeout: float):
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with NO_PROXY_OPENER.open(request, timeout=timeout) as response:
             body = response.read().decode("utf-8", errors="replace")
             return response.status, body
     except urllib.error.HTTPError as error:
@@ -36,7 +39,7 @@ def stream_chat(url: str, payload: dict, timeout: float) -> tuple[int, str]:
     )
     first_text = ""
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with NO_PROXY_OPENER.open(request, timeout=timeout) as response:
             for raw_line in response:
                 line = raw_line.decode("utf-8", errors="replace").strip()
                 if not line.startswith("data: "):
