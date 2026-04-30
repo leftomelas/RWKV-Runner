@@ -1,3 +1,4 @@
+import os
 from typing import List, Tuple, Dict, Any, Union
 
 import torch
@@ -91,3 +92,128 @@ def sample_logits_real_batch(
     # ====== 6. 采样 (完全并行) ======
     next_tokens = torch.multinomial(probs, num_samples=1).squeeze(-1)
     return next_tokens
+
+
+def _sampler_mode() -> str:
+    return os.environ.get("ALBATROSS_SAMPLER", "python").strip().lower()
+
+
+def _sample_greedy(logits: torch.Tensor) -> torch.Tensor:
+    return torch.argmax(logits, dim=-1).to(torch.long)
+
+
+def _sample_gumbel(logits: torch.Tensor, temperature: torch.Tensor, eps: float = 6.2e-5) -> torch.Tensor:
+    scaled = logits / temperature
+    noise = torch.empty_like(scaled).exponential_().clamp_(min=eps).log_().neg_()
+    return torch.argmax(scaled + noise, dim=-1).to(torch.long)
+
+
+def _cuda_sampler_available() -> bool:
+    return (
+        torch.cuda.is_available()
+        and hasattr(torch.ops, "rwkv7_state_fwd_fp16")
+        and hasattr(torch.ops.rwkv7_state_fwd_fp16, "setup_rand")
+        and hasattr(torch.ops.rwkv7_state_fwd_fp16, "batch_sampling_repetition_temperature_topk_topp")
+    )
+
+
+def _all_rows_equal(tensor: torch.Tensor) -> bool:
+    if tensor.shape[0] <= 1:
+        return True
+    return bool(torch.all(tensor == tensor[:1]).item())
+
+
+def _cuda_uniform_parameters_available(
+    temperature: torch.Tensor,
+    top_p: torch.Tensor,
+    top_k: torch.Tensor,
+    alpha_presence: torch.Tensor,
+    alpha_frequency: torch.Tensor,
+    penalty_decay: torch.Tensor,
+) -> bool:
+    return all(
+        _all_rows_equal(tensor)
+        for tensor in (
+            temperature,
+            top_p,
+            top_k,
+            alpha_presence,
+            alpha_frequency,
+            penalty_decay,
+        )
+    )
+
+
+def _sample_cuda_uniform(
+    logits: torch.Tensor,
+    occurrence: torch.Tensor,
+    temperature: torch.Tensor,
+    top_p: torch.Tensor,
+    top_k: torch.Tensor,
+    alpha_presence: torch.Tensor,
+    alpha_frequency: torch.Tensor,
+    penalty_decay: torch.Tensor,
+) -> torch.Tensor:
+    logits_fp32 = logits.float().contiguous()
+    occurrence_fp32 = occurrence.float().contiguous()
+    batch = logits_fp32.shape[0]
+    seed = int(torch.randint(0, 2**31 - 1, (), device="cpu").item())
+    states = torch.ops.rwkv7_state_fwd_fp16.setup_rand(seed, batch)
+    tokens = torch.ops.rwkv7_state_fwd_fp16.batch_sampling_repetition_temperature_topk_topp(
+        logits_fp32,
+        occurrence_fp32,
+        states,
+        float(alpha_presence[0, 0].item()),
+        float(alpha_frequency[0, 0].item()),
+        float(penalty_decay[0, 0].item()),
+        float(temperature[0, 0].item()),
+        int(top_k[0, 0].item()),
+        float(top_p[0, 0].item()),
+    )
+    return tokens.to(torch.long)
+
+
+def sample_next_tokens_batch(
+    *,
+    logits: torch.Tensor,
+    occurrence: torch.Tensor,
+    temperature: torch.Tensor,
+    top_p: torch.Tensor,
+    top_k: torch.Tensor,
+    alpha_presence: torch.Tensor,
+    alpha_frequency: torch.Tensor,
+    penalty_decay: torch.Tensor,
+) -> torch.Tensor:
+    mode = _sampler_mode()
+    if mode == "python":
+        return sample_logits_real_batch(logits, temperature, top_p, top_k).to(torch.long)
+    if mode == "greedy":
+        return _sample_greedy(logits)
+    if mode == "gumbel":
+        return _sample_gumbel(logits, temperature)
+    if mode == "cuda":
+        if _cuda_sampler_available() and _cuda_uniform_parameters_available(
+            temperature,
+            top_p,
+            top_k,
+            alpha_presence,
+            alpha_frequency,
+            penalty_decay,
+        ):
+            return _sample_cuda_uniform(
+                logits,
+                occurrence,
+                temperature,
+                top_p,
+                top_k,
+                alpha_presence,
+                alpha_frequency,
+                penalty_decay,
+            )
+        if os.environ.get("ALBATROSS_SAMPLER_FALLBACK", "1") == "1":
+            return sample_logits_real_batch(logits, temperature, top_p, top_k).to(torch.long)
+        raise RuntimeError(
+            "ALBATROSS_SAMPLER=cuda requested but CUDA sampler is unavailable "
+            "or active batch sampling parameters are not uniform"
+        )
+    raise ValueError(f"Unsupported ALBATROSS_SAMPLER={mode!r}")

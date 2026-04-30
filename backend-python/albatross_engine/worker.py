@@ -1,6 +1,7 @@
 import asyncio
 import queue
 import gc
+import os
 import types
 import time
 import threading
@@ -9,7 +10,8 @@ import torch
 from collections import deque
 
 from albatross_engine.task import Task, ModelLoadConfig, RequestStatus, FinishReason
-from albatross_engine.sampling import sample_logits_real_batch
+from albatross_engine.sampling import sample_next_tokens_batch
+from albatross_engine.profiling import ProfileAccumulator
 # from albatross_engine.rapid_sampling_wrapper import load_rapid_sampling
 
 # 定义TaskData的类型结构
@@ -180,6 +182,7 @@ class Worker:
         self.tokenizer: TRIE_TOKENIZER = None
 
         self.loop_time_recorder = deque(maxlen=10)
+        self.profile = ProfileAccumulator(enabled=os.environ.get("ALBATROSS_PROFILE") == "1")
 
     def _send_worker_loaded_message(self):
         """发送 Worker 加载成功信息"""
@@ -303,59 +306,60 @@ class Worker:
         if pos_a == pos_b:
             return
 
-        assert (
-            pos_a < self.max_batch_size and pos_b < self.max_batch_size
-        ), f"pos_a {pos_a}, pos_b {pos_b}, max_batch_size {self.max_batch_size}, real_state_size {self.real_state_size}; pos_a and pos_b shall be less than max_batch_size."
+        with self.profile.time("state_swap"):
+            assert (
+                pos_a < self.max_batch_size and pos_b < self.max_batch_size
+            ), f"pos_a {pos_a}, pos_b {pos_b}, max_batch_size {self.max_batch_size}, real_state_size {self.real_state_size}; pos_a and pos_b shall be less than max_batch_size."
 
-        # switch state
+            # switch state
 
-        # cache pos_a
-        self.batch_state[0][:, :, [self.real_state_size - 1], :] = self.batch_state[0][:, :, [pos_a], :]
-        self.batch_state[1][:, [self.real_state_size - 1], :, :] = self.batch_state[1][:, [pos_a], :, :]
-        self.batch_state[2][[self.real_state_size - 1]] = self.batch_state[2][[pos_a]]
+            # cache pos_a
+            self.batch_state[0][:, :, [self.real_state_size - 1], :] = self.batch_state[0][:, :, [pos_a], :]
+            self.batch_state[1][:, [self.real_state_size - 1], :, :] = self.batch_state[1][:, [pos_a], :, :]
+            self.batch_state[2][[self.real_state_size - 1]] = self.batch_state[2][[pos_a]]
 
-        # pos_b -> pos_a
-        self.batch_state[0][:, :, [pos_a], :] = self.batch_state[0][:, :, [pos_b], :]
-        self.batch_state[1][:, [pos_a], :, :] = self.batch_state[1][:, [pos_b], :, :]
-        self.batch_state[2][[pos_a]] = self.batch_state[2][[pos_b]]
+            # pos_b -> pos_a
+            self.batch_state[0][:, :, [pos_a], :] = self.batch_state[0][:, :, [pos_b], :]
+            self.batch_state[1][:, [pos_a], :, :] = self.batch_state[1][:, [pos_b], :, :]
+            self.batch_state[2][[pos_a]] = self.batch_state[2][[pos_b]]
 
-        # cached pos_a -> pos_b
-        self.batch_state[0][:, :, [pos_b], :] = self.batch_state[0][:, :, [self.real_state_size - 1], :]
-        self.batch_state[1][:, [pos_b], :, :] = self.batch_state[1][:, [self.real_state_size - 1], :, :]
-        self.batch_state[2][[pos_b]] = self.batch_state[2][[self.real_state_size - 1]]
+            # cached pos_a -> pos_b
+            self.batch_state[0][:, :, [pos_b], :] = self.batch_state[0][:, :, [self.real_state_size - 1], :]
+            self.batch_state[1][:, [pos_b], :, :] = self.batch_state[1][:, [self.real_state_size - 1], :, :]
+            self.batch_state[2][[pos_b]] = self.batch_state[2][[self.real_state_size - 1]]
 
-        self.occurrence[[self.real_state_size - 1], :] = self.occurrence[[pos_a], :]
-        self.occurrence[[pos_a], :] = self.occurrence[[pos_b], :]
-        self.occurrence[[pos_b], :] = self.occurrence[[self.real_state_size - 1], :]
+            self.occurrence[[self.real_state_size - 1], :] = self.occurrence[[pos_a], :]
+            self.occurrence[[pos_a], :] = self.occurrence[[pos_b], :]
+            self.occurrence[[pos_b], :] = self.occurrence[[self.real_state_size - 1], :]
 
-        self.alpha_presence_vector[[self.real_state_size - 1], :] = self.alpha_presence_vector[[pos_a], :]
-        self.alpha_presence_vector[[pos_a], :] = self.alpha_presence_vector[[pos_b], :]
-        self.alpha_presence_vector[[pos_b], :] = self.alpha_presence_vector[[self.real_state_size - 1], :]
+            self.alpha_presence_vector[[self.real_state_size - 1], :] = self.alpha_presence_vector[[pos_a], :]
+            self.alpha_presence_vector[[pos_a], :] = self.alpha_presence_vector[[pos_b], :]
+            self.alpha_presence_vector[[pos_b], :] = self.alpha_presence_vector[[self.real_state_size - 1], :]
 
-        self.frequency_penalty_tensor[[self.real_state_size - 1], :] = self.frequency_penalty_tensor[[pos_a], :]
-        self.frequency_penalty_tensor[[pos_a], :] = self.frequency_penalty_tensor[[pos_b], :]
-        self.frequency_penalty_tensor[[pos_b], :] = self.frequency_penalty_tensor[[self.real_state_size - 1], :]
+            self.frequency_penalty_tensor[[self.real_state_size - 1], :] = self.frequency_penalty_tensor[[pos_a], :]
+            self.frequency_penalty_tensor[[pos_a], :] = self.frequency_penalty_tensor[[pos_b], :]
+            self.frequency_penalty_tensor[[pos_b], :] = self.frequency_penalty_tensor[[self.real_state_size - 1], :]
 
-        self.penalty_decay_tensor[[self.real_state_size - 1], :] = self.penalty_decay_tensor[[pos_a], :]
-        self.penalty_decay_tensor[[pos_a], :] = self.penalty_decay_tensor[[pos_b], :]
-        self.penalty_decay_tensor[[pos_b], :] = self.penalty_decay_tensor[[self.real_state_size - 1], :]
+            self.penalty_decay_tensor[[self.real_state_size - 1], :] = self.penalty_decay_tensor[[pos_a], :]
+            self.penalty_decay_tensor[[pos_a], :] = self.penalty_decay_tensor[[pos_b], :]
+            self.penalty_decay_tensor[[pos_b], :] = self.penalty_decay_tensor[[self.real_state_size - 1], :]
 
-        # sample params
-        self.temperature_tensor[[self.real_state_size - 1], :] = self.temperature_tensor[[pos_a], :]
-        self.temperature_tensor[[pos_a], :] = self.temperature_tensor[[pos_b], :]
-        self.temperature_tensor[[pos_b], :] = self.temperature_tensor[[self.real_state_size - 1], :]
+            # sample params
+            self.temperature_tensor[[self.real_state_size - 1], :] = self.temperature_tensor[[pos_a], :]
+            self.temperature_tensor[[pos_a], :] = self.temperature_tensor[[pos_b], :]
+            self.temperature_tensor[[pos_b], :] = self.temperature_tensor[[self.real_state_size - 1], :]
 
-        self.top_p_tensor[[self.real_state_size - 1], :] = self.top_p_tensor[[pos_a], :]
-        self.top_p_tensor[[pos_a], :] = self.top_p_tensor[[pos_b], :]
-        self.top_p_tensor[[pos_b], :] = self.top_p_tensor[[self.real_state_size - 1], :]
+            self.top_p_tensor[[self.real_state_size - 1], :] = self.top_p_tensor[[pos_a], :]
+            self.top_p_tensor[[pos_a], :] = self.top_p_tensor[[pos_b], :]
+            self.top_p_tensor[[pos_b], :] = self.top_p_tensor[[self.real_state_size - 1], :]
 
-        self.top_k_tensor[[self.real_state_size - 1], :] = self.top_k_tensor[[pos_a], :]
-        self.top_k_tensor[[pos_a], :] = self.top_k_tensor[[pos_b], :]
-        self.top_k_tensor[[pos_b], :] = self.top_k_tensor[[self.real_state_size - 1], :]
+            self.top_k_tensor[[self.real_state_size - 1], :] = self.top_k_tensor[[pos_a], :]
+            self.top_k_tensor[[pos_a], :] = self.top_k_tensor[[pos_b], :]
+            self.top_k_tensor[[pos_b], :] = self.top_k_tensor[[self.real_state_size - 1], :]
 
-        self.presence_penalty_tensor[[self.real_state_size - 1], :] = self.presence_penalty_tensor[[pos_a], :]
-        self.presence_penalty_tensor[[pos_a], :] = self.presence_penalty_tensor[[pos_b], :]
-        self.presence_penalty_tensor[[pos_b], :] = self.presence_penalty_tensor[[self.real_state_size - 1], :]
+            self.presence_penalty_tensor[[self.real_state_size - 1], :] = self.presence_penalty_tensor[[pos_a], :]
+            self.presence_penalty_tensor[[pos_a], :] = self.presence_penalty_tensor[[pos_b], :]
+            self.presence_penalty_tensor[[pos_b], :] = self.presence_penalty_tensor[[self.real_state_size - 1], :]
 
     def _organize_batch(self):
         """返回 ([start_pos, end_pos),)
@@ -715,12 +719,17 @@ class Worker:
             )
 
             # 采样（只对 decode）
-            new_tokens = sample_logits_real_batch(
-                decode_out,
-                self.temperature_tensor[decode_slice, :],
-                self.top_p_tensor[decode_slice, :],
-                self.top_k_tensor[decode_slice, :],
-            )
+            with self.profile.time("sampling"):
+                new_tokens = sample_next_tokens_batch(
+                    logits=decode_out,
+                    occurrence=self.occurrence[decode_slice, :],
+                    temperature=self.temperature_tensor[decode_slice, :],
+                    top_p=self.top_p_tensor[decode_slice, :],
+                    top_k=self.top_k_tensor[decode_slice, :],
+                    alpha_presence=self.alpha_presence_vector[decode_slice, :],
+                    alpha_frequency=self.frequency_penalty_tensor[decode_slice, :],
+                    penalty_decay=self.penalty_decay_tensor[decode_slice, :],
+                )
 
             for slot_pos in range(*decode_offset):
                 new_token = new_tokens[slot_pos - decode_offset[0]].item()
@@ -776,7 +785,8 @@ class Worker:
         while True:
             loop_start_time = time.perf_counter()
 
-            should_shutdown = self._process_events()
+            with self.profile.time("process_events"):
+                should_shutdown = self._process_events()
 
             if should_shutdown:
                 break
@@ -784,43 +794,53 @@ class Worker:
             accomplished_task_slot_pos: list[int] = []
             penalty_updates: list[Tuple[int, int, float]] = []  # 收集需要批量更新的 penalty 数据
 
-            for key, task_data in sorted(self.state_slot.items()):
+            with self.profile.time("state_slot_scan"):
+                for key, task_data in sorted(self.state_slot.items()):
 
-                assert (
-                    task_data["state_category"] != StateCategory.FINISHED
-                ), f"Invalid state category: {task_data['state_category'] }"
+                    assert (
+                        task_data["state_category"] != StateCategory.FINISHED
+                    ), f"Invalid state category: {task_data['state_category'] }"
 
-                if task_data["state_category"] == StateCategory.EMPTY:
-                    continue
+                    if task_data["state_category"] == StateCategory.EMPTY:
+                        continue
 
-                if self._is_task_aborted(task_data):
-                    task_data["task"].request_status = RequestStatus.FINISHED_ABORTED
-                    task_data["state_category"] = StateCategory.FINISHED
+                    if self._is_task_aborted(task_data):
+                        task_data["task"].request_status = RequestStatus.FINISHED_ABORTED
+                        task_data["state_category"] = StateCategory.FINISHED
 
-                elif task_data["state_category"] == StateCategory.FORWARD_SEQ:
-                    self._handle_forward_seq(task_data, key)
+                    elif task_data["state_category"] == StateCategory.FORWARD_SEQ:
+                        self._handle_forward_seq(task_data, key)
 
-                elif task_data["state_category"] == StateCategory.FORWARD_ONE_PREFILL:
-                    self._handle_forward_one_prefill_phase(task_data, key)
+                    elif task_data["state_category"] == StateCategory.FORWARD_ONE_PREFILL:
+                        self._handle_forward_one_prefill_phase(task_data, key)
 
-                elif task_data["state_category"] == StateCategory.FORWARD_ONE_DECODE:
-                    update_info = self._handle_forward_one_decode_phase(task_data, key)
-                    if update_info is not None:
-                        penalty_updates.append(update_info)
+                    elif task_data["state_category"] == StateCategory.FORWARD_ONE_DECODE:
+                        update_info = self._handle_forward_one_decode_phase(task_data, key)
+                        if update_info is not None:
+                            penalty_updates.append(update_info)
 
-                if RequestStatus.is_finished(task_data["task"].request_status):
-                    accomplished_task_slot_pos.append(key)
+                    if RequestStatus.is_finished(task_data["task"].request_status):
+                        accomplished_task_slot_pos.append(key)
 
             # 批量更新 penalty（原来是在循环内逐个更新）
-            self._batch_update_penalty(penalty_updates)
+            with self.profile.time("batch_update_penalty"):
+                self._batch_update_penalty(penalty_updates)
 
-            self._process_accomplished_tasks(accomplished_task_slot_pos)
+            with self.profile.time("process_accomplished"):
+                self._process_accomplished_tasks(accomplished_task_slot_pos)
 
-            self._fill_task_pool()
+            with self.profile.time("fill_task_pool"):
+                self._fill_task_pool()
 
-            decode_offset, one_prefill_offset, decode_suspended_offset, seq_perfill_offset, accomplished_offset, empty_offset = (
-                self._organize_batch()
-            )
+            with self.profile.time("organize_batch"):
+                decode_offset, one_prefill_offset, decode_suspended_offset, seq_perfill_offset, accomplished_offset, empty_offset = (
+                    self._organize_batch()
+                )
+
+            self.profile.add("worker_loops", 1)
+            self.profile.add("decode_tokens_scheduled", max(0, decode_offset[1] - decode_offset[0]))
+            self.profile.add("one_prefill_scheduled", max(0, one_prefill_offset[1] - one_prefill_offset[0]))
+            self.profile.add("seq_prefill_scheduled", max(0, seq_perfill_offset[1] - seq_perfill_offset[0]))
 
             if decode_offset[1] - decode_offset[0] == 0 and one_prefill_offset[1] - one_prefill_offset[0] == 0 and seq_perfill_offset[1] - seq_perfill_offset[0] == 0:
                 time.sleep(0.05)
@@ -829,13 +849,15 @@ class Worker:
             # 检查是否有 one forward 任务（decode 或 one prefill）
             one_forward_count = one_prefill_offset[1] - decode_offset[0]
             if one_forward_count > 0:
-                self._run_forward_one(decode_offset, one_prefill_offset)
+                with self.profile.time("forward_one"):
+                    self._run_forward_one(decode_offset, one_prefill_offset)
                 self.seq_forward_count_down -= 1
             else:
                 self.seq_forward_count_down = 0
 
             if self.seq_forward_count_down < 1 and seq_perfill_offset[1] - seq_perfill_offset[0] > 0:
-                self._run_forward_seq(seq_perfill_offset)
+                with self.profile.time("forward_seq"):
+                    self._run_forward_seq(seq_perfill_offset)
                 self.seq_forward_count_down = max(1, self.decode_prefill_ratio)
 
             self.loop_time_recorder.append(time.perf_counter() - loop_start_time)
@@ -862,6 +884,7 @@ class Worker:
                             "seq_prefill_count": seq_perfill_offset[1] - seq_perfill_offset[0],
                         },
                         "max_allocated_memory_GB": torch.cuda.max_memory_allocated() / 1024**3,
+                        "profile": self.profile.snapshot(reset=False),
                     },
                 )
                 self.worker_event_queue.put_nowait(info)

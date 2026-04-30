@@ -25,6 +25,7 @@ class WorkerPerformanceInfo(TypedDict):
     state_offset_details: Dict[str, Tuple[int, int]]
     task_details: Dict[str, int]
     max_allocated_memory_GB: float
+    profile: Dict[str, Any]
 
 
 class ThreadSafeAsyncQueue:
@@ -320,6 +321,7 @@ class AsyncEngineCore:
                         state_offset_details=payload["state_offset_details"],
                         task_details=payload["task_details"],
                         max_allocated_memory_GB=payload["max_allocated_memory_GB"],
+                        profile=payload.get("profile", {"enabled": False, "counters": {}, "timers": {}}),
                     )
             except asyncio.TimeoutError:
                 continue

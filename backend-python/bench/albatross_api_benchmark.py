@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import statistics
 import time
 import urllib.error
@@ -162,6 +163,10 @@ def main() -> int:
         default="Write one concise paragraph about parallel language model inference.",
     )
     args = parser.parse_args()
+
+    print(f"ALBATROSS_PROFILE: {os.environ.get('ALBATROSS_PROFILE', '0')}")
+    print(f"ALBATROSS_SAMPLER: {os.environ.get('ALBATROSS_SAMPLER', 'python')}")
+    print(f"ALBATROSS_SCHEDULER: {os.environ.get('ALBATROSS_SCHEDULER', 'legacy')}")
 
     url = f"http://{args.host}:{args.port}/v1/chat/completions"
     profile_url = f"http://{args.host}:{args.port}/albatross/profile"

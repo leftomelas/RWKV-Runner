@@ -1,5 +1,7 @@
 import argparse
 import asyncio
+import contextlib
+import os
 import pathlib
 import statistics
 import sys
@@ -43,6 +45,12 @@ async def consume_completion(completion) -> dict:
 
 
 async def run_benchmark(args) -> int:
+    print(f"ALBATROSS_PROFILE: {os.environ.get('ALBATROSS_PROFILE', '0')}")
+    print(f"ALBATROSS_SAMPLER: {os.environ.get('ALBATROSS_SAMPLER', 'python')}")
+    print(f"ALBATROSS_SAMPLER_FALLBACK: {os.environ.get('ALBATROSS_SAMPLER_FALLBACK', '1')}")
+    print(f"ALBATROSS_SCHEDULER: {os.environ.get('ALBATROSS_SCHEDULER', 'legacy')}")
+    print(f"ALBATROSS_KERNEL_ARCH: {os.environ.get('ALBATROSS_KERNEL_ARCH', '<auto>')}")
+
     engine = AsyncEngineCore()
     vocab = (
         pathlib.Path(args.vocab)
@@ -64,6 +72,14 @@ async def run_benchmark(args) -> int:
     )
     print(f"init wall: {time.perf_counter() - init_started:.3f}s", flush=True)
 
+    worker_profiles = []
+
+    async def collect_worker_profile():
+        async for perf in engine.iter_worker_performance(timeout=0.2):
+            worker_profiles.append(perf)
+
+    collector = asyncio.create_task(collect_worker_profile())
+
     stop_tokens = [] if args.no_stop else [0]
     completions = [
         engine.completion(
@@ -82,6 +98,9 @@ async def run_benchmark(args) -> int:
         *(consume_completion(completion) for completion in completions)
     )
     ended = time.perf_counter()
+    collector.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await collector
     engine.shutdown()
 
     ok_results = [result for result in results if result["tokens"] >= 0]
@@ -111,6 +130,15 @@ async def run_benchmark(args) -> int:
         print(f"request wall time avg: {statistics.mean(wall_times):.3f}s")
         print(f"request wall time p50: {percentile(wall_times, 0.50):.3f}s")
         print(f"request wall time p95: {percentile(wall_times, 0.95):.3f}s")
+    if worker_profiles:
+        last_profile = worker_profiles[-1].get("profile", {})
+        print("Worker profile")
+        print(f"profile enabled: {last_profile.get('enabled')}")
+        for name, value in sorted(last_profile.get("counters", {}).items()):
+            print(f"{name}: {value}")
+        for name, value in sorted(last_profile.get("timers", {}).items()):
+            print(f"{name}_total_ms: {value.get('total_ms'):.3f}")
+            print(f"{name}_avg_ms: {value.get('avg_ms'):.6f}")
     return 0
 
 
