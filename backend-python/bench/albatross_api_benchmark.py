@@ -10,6 +10,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
+def request_json(url: str, method: str = "GET") -> dict:
+    request = urllib.request.Request(url, method=method)
+    with NO_PROXY_OPENER.open(request, timeout=30) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
 def post_stream_chat(url: str, payload: dict, timeout: float) -> dict:
     started = time.perf_counter()
     first_token_at = None
@@ -147,12 +153,21 @@ def main() -> int:
         help="disable text stop strings; EOS stop token may still end generation",
     )
     parser.add_argument(
+        "--profile",
+        action="store_true",
+        help="reset and print /albatross/profile around this benchmark run",
+    )
+    parser.add_argument(
         "--prompt",
         default="Write one concise paragraph about parallel language model inference.",
     )
     args = parser.parse_args()
 
     url = f"http://{args.host}:{args.port}/v1/chat/completions"
+    profile_url = f"http://{args.host}:{args.port}/albatross/profile"
+    if args.profile:
+        request_json(f"{profile_url}/reset", method="POST")
+
     payload = {
         "messages": [{"role": "user", "content": args.prompt}],
         "model": "rwkv",
@@ -212,6 +227,22 @@ def main() -> int:
         print("\nFirst failure:")
         print(failed_results[0].get("error", "unknown error"))
         return 1
+    if args.profile:
+        profile = request_json(profile_url)
+        print("\nServer profile")
+        for key in (
+            "requests",
+            "stream_requests",
+            "tokens",
+            "stream_chunks",
+            "bytes",
+            "completion_wait_ms",
+            "disconnect_check_ms",
+            "json_dump_ms",
+            "yield_resume_ms",
+            "request_wall_ms",
+        ):
+            print(f"{key}: {profile.get(key)}")
     return 0
 
 

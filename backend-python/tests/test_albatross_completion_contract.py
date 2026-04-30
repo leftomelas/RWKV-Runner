@@ -67,6 +67,33 @@ class FakeAsyncAlbatross:
 
 
 class AlbatrossCompletionContractTests(unittest.IsolatedAsyncioTestCase):
+    async def test_albatross_profile_accumulator_tracks_route_costs(self):
+        profiler = completion.AlbatrossProfileAccumulator()
+
+        profiler.add_request(
+            stream=True,
+            tokens=10,
+            chunks=10,
+            bytes_sent=1000,
+            completion_wait_ns=2_000_000,
+            disconnect_check_ns=300_000,
+            json_dump_ns=400_000,
+            yield_resume_ns=500_000,
+            request_wall_ns=3_000_000,
+        )
+
+        snapshot = profiler.snapshot()
+        self.assertEqual(snapshot["requests"], 1)
+        self.assertEqual(snapshot["stream_requests"], 1)
+        self.assertEqual(snapshot["tokens"], 10)
+        self.assertEqual(snapshot["stream_chunks"], 10)
+        self.assertEqual(snapshot["bytes"], 1000)
+        self.assertEqual(snapshot["completion_wait_ms"], 2.0)
+        self.assertEqual(snapshot["disconnect_check_ms"], 0.3)
+        self.assertEqual(snapshot["json_dump_ms"], 0.4)
+        self.assertEqual(snapshot["yield_resume_ms"], 0.5)
+        self.assertEqual(snapshot["request_wall_ms"], 3.0)
+
     async def test_eval_albatross_non_streaming_chat_response(self):
         body = completion.ChatCompletionBody(messages=[])
         model = FakeAlbatross()

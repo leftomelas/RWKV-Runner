@@ -1,5 +1,7 @@
 import asyncio
 import json
+import os
+import threading
 from threading import Lock
 from typing import List, Union, Literal
 from enum import Enum
@@ -130,6 +132,95 @@ def dumps_stream_chunk(payload: dict) -> str:
     return json.dumps(payload, separators=(",", ":"))
 
 
+class AlbatrossProfileAccumulator:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.reset()
+
+    def reset(self):
+        with self._lock:
+            self.requests = 0
+            self.stream_requests = 0
+            self.tokens = 0
+            self.stream_chunks = 0
+            self.bytes = 0
+            self.completion_wait_ns = 0
+            self.disconnect_check_ns = 0
+            self.json_dump_ns = 0
+            self.yield_resume_ns = 0
+            self.request_wall_ns = 0
+
+    def add_request(
+        self,
+        *,
+        stream: bool,
+        tokens: int,
+        chunks: int,
+        bytes_sent: int,
+        completion_wait_ns: int,
+        disconnect_check_ns: int,
+        json_dump_ns: int,
+        yield_resume_ns: int,
+        request_wall_ns: int,
+    ):
+        with self._lock:
+            self.requests += 1
+            self.stream_requests += 1 if stream else 0
+            self.tokens += tokens
+            self.stream_chunks += chunks
+            self.bytes += bytes_sent
+            self.completion_wait_ns += completion_wait_ns
+            self.disconnect_check_ns += disconnect_check_ns
+            self.json_dump_ns += json_dump_ns
+            self.yield_resume_ns += yield_resume_ns
+            self.request_wall_ns += request_wall_ns
+
+    def snapshot(self, reset: bool = False) -> dict:
+        with self._lock:
+            data = {
+                "requests": self.requests,
+                "stream_requests": self.stream_requests,
+                "tokens": self.tokens,
+                "stream_chunks": self.stream_chunks,
+                "bytes": self.bytes,
+                "completion_wait_ms": self.completion_wait_ns / 1_000_000,
+                "disconnect_check_ms": self.disconnect_check_ns / 1_000_000,
+                "json_dump_ms": self.json_dump_ns / 1_000_000,
+                "yield_resume_ms": self.yield_resume_ns / 1_000_000,
+                "request_wall_ms": self.request_wall_ns / 1_000_000,
+            }
+            if reset:
+                self.requests = 0
+                self.stream_requests = 0
+                self.tokens = 0
+                self.stream_chunks = 0
+                self.bytes = 0
+                self.completion_wait_ns = 0
+                self.disconnect_check_ns = 0
+                self.json_dump_ns = 0
+                self.yield_resume_ns = 0
+                self.request_wall_ns = 0
+            return data
+
+
+albatross_profile = AlbatrossProfileAccumulator()
+
+
+def albatross_profile_enabled() -> bool:
+    return os.environ.get("ALBATROSS_PROFILE") == "1"
+
+
+@router.get("/albatross/profile", tags=["Albatross"])
+def get_albatross_profile(reset: bool = False):
+    return albatross_profile.snapshot(reset=reset)
+
+
+@router.post("/albatross/profile/reset", tags=["Albatross"])
+def reset_albatross_profile():
+    albatross_profile.reset()
+    return {"success": True}
+
+
 async def eval_albatross(
     model: AlbatrossRWKV,
     request: Request,
@@ -169,32 +260,62 @@ async def eval_albatross(
             elif hasattr(completion, "aclose"):
                 await completion.aclose()
 
-    async def iter_completion():
-        if use_async_completion:
-            async for event in completion:
-                yield event
-        else:
-            for event in completion:
-                yield event
-
     async def should_abort_after_token(token_index: int) -> bool:
         if token_index == 1 or token_index % ALBATROSS_DISCONNECT_CHECK_INTERVAL == 0:
-            return await request.is_disconnected()
+            started = time.perf_counter_ns() if profile else 0
+            disconnected = await request.is_disconnected()
+            if profile:
+                profile_data["disconnect_check_ns"] += time.perf_counter_ns() - started
+            return disconnected
         return False
 
+    async def next_completion_event():
+        started = time.perf_counter_ns() if profile else 0
+        try:
+            if use_async_completion:
+                event = await completion_iterator.__anext__()
+            else:
+                event = next(completion_iterator)
+        except (StopAsyncIteration, StopIteration):
+            if profile:
+                profile_data["completion_wait_ns"] += time.perf_counter_ns() - started
+            return None
+        if profile:
+            profile_data["completion_wait_ns"] += time.perf_counter_ns() - started
+        return event
+
+    profile = albatross_profile_enabled()
+    profile_data = {
+        "tokens": 0,
+        "chunks": 0,
+        "bytes": 0,
+        "completion_wait_ns": 0,
+        "disconnect_check_ns": 0,
+        "json_dump_ns": 0,
+        "yield_resume_ns": 0,
+        "request_wall_started_ns": time.perf_counter_ns(),
+    }
+    completion_iterator = completion.__aiter__() if use_async_completion else iter(completion)
+
     try:
-        async for (
-            response_type,
-            response,
-            delta,
-            prompt_tokens,
-            completion_tokens,
-        ) in iter_completion():
+        while True:
+            event = await next_completion_event()
+            if event is None:
+                break
+            (
+                response_type,
+                response,
+                delta,
+                prompt_tokens,
+                completion_tokens,
+            ) = event
+            profile_data["tokens"] = completion_tokens
             if await should_abort_after_token(completion_tokens):
                 await abort_completion()
                 break
             if stream:
-                yield dumps_stream_chunk(
+                started = time.perf_counter_ns() if profile else 0
+                chunk = dumps_stream_chunk(
                     {
                         "object": (
                             "chat.completion.chunk"
@@ -219,9 +340,34 @@ async def eval_albatross(
                         ],
                     }
                 )
+                if profile:
+                    profile_data["json_dump_ns"] += time.perf_counter_ns() - started
+                    profile_data["chunks"] += 1
+                    profile_data["bytes"] += len(chunk)
+                    started = time.perf_counter_ns()
+                yield chunk
+                if profile:
+                    profile_data["yield_resume_ns"] += time.perf_counter_ns() - started
     finally:
-        if await request.is_disconnected():
+        started = time.perf_counter_ns() if profile else 0
+        disconnected = await request.is_disconnected()
+        if profile:
+            profile_data["disconnect_check_ns"] += time.perf_counter_ns() - started
+        if disconnected:
             await abort_completion()
+        if profile:
+            albatross_profile.add_request(
+                stream=stream,
+                tokens=profile_data["tokens"],
+                chunks=profile_data["chunks"],
+                bytes_sent=profile_data["bytes"],
+                completion_wait_ns=profile_data["completion_wait_ns"],
+                disconnect_check_ns=profile_data["disconnect_check_ns"],
+                json_dump_ns=profile_data["json_dump_ns"],
+                yield_resume_ns=profile_data["yield_resume_ns"],
+                request_wall_ns=time.perf_counter_ns()
+                - profile_data["request_wall_started_ns"],
+            )
 
     if aborted:
         return
