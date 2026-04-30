@@ -109,3 +109,37 @@ def test_cuda_sampler_falls_back_for_non_uniform_parameters(monkeypatch=None):
         if monkeypatch is None:
             sampling._cuda_sampler_available = original_available
             sampling._sample_cuda_uniform = original_cuda
+
+
+def test_cuda_sampler_allows_non_uniform_penalty_tensors(monkeypatch=None):
+    if monkeypatch is not None:
+        monkeypatch.setenv("ALBATROSS_SAMPLER", "cuda")
+        monkeypatch.setenv("ALBATROSS_SAMPLER_FALLBACK", "0")
+        monkeypatch.setattr(sampling, "_cuda_sampler_available", lambda: True)
+        monkeypatch.setattr(sampling, "_sample_cuda_uniform", lambda *args, **kwargs: torch.tensor([1, 2]))
+    else:
+        original_available = sampling._cuda_sampler_available
+        original_cuda = sampling._sample_cuda_uniform
+        sampling._cuda_sampler_available = lambda: True
+        sampling._sample_cuda_uniform = lambda *args, **kwargs: torch.tensor([1, 2])
+
+    try:
+        logits = torch.randn(2, 16)
+        occurrence = torch.zeros_like(logits)
+        occurrence[1, 3] = 1.0
+        tokens = sampling.sample_next_tokens_batch(
+            logits=logits,
+            occurrence=occurrence,
+            temperature=torch.ones(2, 1),
+            top_p=torch.ones(2, 1),
+            top_k=torch.zeros(2, 1, dtype=torch.long),
+            alpha_presence=occurrence.clone(),
+            alpha_frequency=torch.ones(2, 1),
+            penalty_decay=torch.tensor([[0.996], [0.5]]),
+        )
+
+        assert tokens.tolist() == [1, 2]
+    finally:
+        if monkeypatch is None:
+            sampling._cuda_sampler_available = original_available
+            sampling._sample_cuda_uniform = original_cuda

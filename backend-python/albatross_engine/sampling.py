@@ -137,9 +137,6 @@ def _cuda_uniform_parameters_available(
             temperature,
             top_p,
             top_k,
-            alpha_presence,
-            alpha_frequency,
-            penalty_decay,
         )
     )
 
