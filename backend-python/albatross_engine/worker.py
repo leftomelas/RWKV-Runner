@@ -44,28 +44,28 @@ RWKV_x070 = ensure_instance_annotations(RWKV_x070_ORIGINAL)
 
 def min_swaps_to_target_fast(lst, elements: list[int]):
     swaps: List[Tuple[int, int]] = []
-    target = sorted(lst)
 
     # 构建每个字符在 target 中的位置队列
-    pos_map = defaultdict(list)
+    positions = defaultdict(list)
     for idx, val in enumerate(lst):
-        pos_map[val].append(idx)
+        positions[val].append(idx)
 
     offsets: List[Tuple[int, int]] = []
     offset = 0
 
     for target in elements:
-        if target not in pos_map:
+        if target not in positions:
             offsets.append((offset, offset))
             continue
 
-        pos = pos_map[target]
+        pos = positions[target]
         target_count = len(pos)
 
         offsets.append((offset, offset + target_count))
 
         target_should_move_back_id = [i for i in pos if i >= target_count + offset]
-        target_avaliable_id = [i for i in range(offset, target_count + offset) if i not in pos]
+        pos_set = set(pos)
+        target_avaliable_id = [i for i in range(offset, target_count + offset) if i not in pos_set]
 
         for k, v in enumerate(target_should_move_back_id):
             swap = (target_avaliable_id[k], v)
@@ -73,9 +73,9 @@ def min_swaps_to_target_fast(lst, elements: list[int]):
             lst[swap[0]], lst[swap[1]] = lst[swap[1]], lst[swap[0]]
 
         offset += target_count
-        pos_map = defaultdict(list)
+        positions = defaultdict(list)
         for idx, val in enumerate(lst[offset:]):
-            pos_map[val].append(idx + offset)
+            positions[val].append(idx + offset)
 
     return swaps, offsets
 
@@ -371,10 +371,10 @@ class Worker:
         - 3: seq prefill
         - 4: finished
         - 5: empty"""
-        current_task_list = [None] * self.max_batch_size
-
-        for slot_pos, task_data in sorted(self.state_slot.items()):
-            current_task_list[slot_pos] = task_data["state_category"]
+        current_task_list = [
+            self.state_slot[slot_pos]["state_category"]
+            for slot_pos in range(self.max_batch_size)
+        ]
 
         swarps, offsets = min_swaps_to_target_fast(current_task_list, [i for i in sorted(StateCategory)])
 

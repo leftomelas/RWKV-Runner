@@ -40,6 +40,15 @@ The internal profile showed why: `decode_output_enqueue_total_ms` dropped from r
 
 After caching CUDA sampler RNG states, the same internal CUDA profile showed `sampling_total_ms` drop from roughly 5683 ms to 5296 ms. Total wall time stayed within run-to-run noise, so this is a small sampler-path cleanup rather than the next major HTTP throughput win.
 
+After a conservative `organize_batch` cleanup, keeping the original swap strategy but avoiding list membership scans and sorted dict iteration, measured CUDA sampler results improved again:
+
+| Path | Result | Change vs previous CUDA |
+| --- | ---: | ---: |
+| Real HTTP non-stream | 4042.67 tok/s | +3.73% |
+| Real HTTP stream | 3587.61 tok/s | +8.75% |
+
+The unsafe heap-based swap rewrite was tested and rejected because it increased `state_swap_total_ms` sharply. Keep future batch-layout work focused on reducing required swaps, not just making the swap planner asymptotically faster.
+
 Canonical real HTTP commands:
 
 ```powershell
