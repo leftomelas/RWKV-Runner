@@ -113,7 +113,7 @@ def _cuda_sampler_available() -> bool:
         torch.cuda.is_available()
         and hasattr(torch.ops, "rwkv7_state_fwd_fp16")
         and hasattr(torch.ops.rwkv7_state_fwd_fp16, "setup_rand")
-        and hasattr(torch.ops.rwkv7_state_fwd_fp16, "batch_sampling_repetition_temperature_topk_topp")
+        and hasattr(torch.ops.rwkv7_state_fwd_fp16, "batch_sampling_temperature_topk_topp")
     )
 
 
@@ -155,17 +155,12 @@ def _sample_cuda_uniform(
     penalty_decay: torch.Tensor,
 ) -> torch.Tensor:
     logits_fp32 = logits.float().contiguous()
-    occurrence_fp32 = occurrence.float().contiguous()
     batch = logits_fp32.shape[0]
     seed = int(torch.randint(0, 2**31 - 1, (), device="cpu").item())
     states = torch.ops.rwkv7_state_fwd_fp16.setup_rand(seed, batch)
-    tokens = torch.ops.rwkv7_state_fwd_fp16.batch_sampling_repetition_temperature_topk_topp(
+    tokens = torch.ops.rwkv7_state_fwd_fp16.batch_sampling_temperature_topk_topp(
         logits_fp32,
-        occurrence_fp32,
         states,
-        float(alpha_presence[0, 0].item()),
-        float(alpha_frequency[0, 0].item()),
-        float(penalty_decay[0, 0].item()),
         float(temperature[0, 0].item()),
         int(top_k[0, 0].item()),
         float(top_p[0, 0].item()),
