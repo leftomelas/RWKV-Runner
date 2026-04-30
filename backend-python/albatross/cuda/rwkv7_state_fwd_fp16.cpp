@@ -6,6 +6,9 @@ typedef at::Half F;
 void cuda_forward_seq(int B, int T, int C, int H, F *state, F *r, F *w, F *k, F *v, F *a, F *b, F *y, int* elapsed_t);
 void cuda_forward_one(int B,        int C, int H, F *state, F *r, F* w, F *k, F *v, F *a, F *b, F *y, int* elapsed_t);
 void cuda_spmv_forward(int D, int C, F* vec, F* mat, F* out);
+torch::Tensor setup_rand(int64_t seed, int64_t B);
+torch::Tensor batch_sampling_temperature_topk_topp(torch::Tensor& logits, torch::Tensor& states, double temperature, int64_t top_k, double top_p);
+torch::Tensor batch_sampling_repetition_temperature_topk_topp(torch::Tensor& logits, torch::Tensor& penalties, torch::Tensor& states, double presence_penalty, double repetition_penalty, double penalty_decay, double temperature, int64_t top_k, double top_p);
 
 void forward_seq(int64_t B, int64_t T, int64_t C, int64_t H, torch::Tensor &state, torch::Tensor &r, torch::Tensor &w, torch::Tensor &k, torch::Tensor &v, torch::Tensor &a, torch::Tensor &b, torch::Tensor &y, torch::Tensor &elapsed_t) {
     cuda_forward_seq(B, T, C, H, state.data_ptr<F>(), r.data_ptr<F>(), w.data_ptr<F>(), k.data_ptr<F>(), v.data_ptr<F>(), a.data_ptr<F>(), b.data_ptr<F>(), y.data_ptr<F>(), elapsed_t.data_ptr<int>());
@@ -22,4 +25,7 @@ TORCH_LIBRARY(rwkv7_state_fwd_fp16, m) {
     m.def("forward_one", forward_one);
     m.def("forward_seq", forward_seq);
     m.def("spmv_forward", spmv_forward);
+    m.def("setup_rand", setup_rand);
+    m.def("batch_sampling_temperature_topk_topp", batch_sampling_temperature_topk_topp);
+    m.def("batch_sampling_repetition_temperature_topk_topp", batch_sampling_repetition_temperature_topk_topp);
 }

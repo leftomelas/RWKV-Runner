@@ -12,6 +12,9 @@ def _has_cuda_sampler():
 
 
 def test_cuda_sampler_contract_if_loaded():
+    if torch.cuda.is_available():
+        import albatross.rwkv7  # noqa: F401
+
     if not torch.cuda.is_available() or not _has_cuda_sampler():
         return
 
