@@ -1,6 +1,15 @@
 import time
+import asyncio
+import queue
 
 from albatross_engine.profiling import ProfileAccumulator
+from albatross_engine.task import Task
+from albatross_engine.worker import StateCategory, Worker
+
+
+class FakeTokenizer:
+    def decode(self, tokens, utf8_errors="ignore"):
+        return f"token-{tokens[0]}"
 
 
 def test_profile_accumulator_records_timer_and_counter():
@@ -50,3 +59,36 @@ def test_profile_payload_shape_is_stable():
 
     assert set(payload) == {"enabled", "counters", "timers"}
     assert payload["counters"]["worker_loops"] == 1
+
+
+def test_worker_decode_phase_profiles_token_decode_and_output_enqueue():
+    worker = Worker.__new__(Worker)
+    worker.profile = ProfileAccumulator(enabled=True)
+    worker.tokenizer = FakeTokenizer()
+    worker.no_penalty_token_ids = set()
+
+    task = Task(
+        output_queue=asyncio.Queue(),
+        task_event_queue=queue.Queue(),
+        prompt_str="",
+        prefill_tokens=[],
+        state=None,
+        max_tokens=2,
+        stop_tokens=[],
+    )
+    task_data = {
+        "task": task,
+        "is_prefilling": False,
+        "new_token": 42,
+        "next_input_token": None,
+        "state_category": StateCategory.FORWARD_ONE_DECODE,
+        "prefilled_tokens": [],
+        "prefill_cached": False,
+    }
+
+    update_info = worker._handle_forward_one_decode_phase(task_data, 3)
+    snapshot = worker.profile.snapshot(reset=False)
+
+    assert update_info == (3, 42, 1.0)
+    assert snapshot["timers"]["decode_tokenizer_decode"]["count"] == 1
+    assert snapshot["timers"]["decode_output_enqueue"]["count"] == 1

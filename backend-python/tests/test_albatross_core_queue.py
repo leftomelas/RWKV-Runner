@@ -1,7 +1,36 @@
 import asyncio
 import unittest
 
-from albatross_engine.core import ThreadSafeAsyncQueue
+from albatross_engine.core import EventLoopQueueDispatcher, ThreadSafeAsyncQueue
+
+
+class FakeEventLoop:
+    def __init__(self):
+        self.callbacks = []
+
+    def is_closed(self):
+        return False
+
+    def call_soon_threadsafe(self, callback):
+        self.callbacks.append(callback)
+
+
+class ThreadSafeAsyncQueueDispatcherTests(unittest.TestCase):
+    def test_shared_dispatcher_coalesces_items_across_result_queues(self):
+        loop = FakeEventLoop()
+        dispatcher = EventLoopQueueDispatcher(loop)
+        first_queue = asyncio.Queue()
+        second_queue = asyncio.Queue()
+        first_channel = ThreadSafeAsyncQueue(loop, first_queue, dispatcher=dispatcher)
+        second_channel = ThreadSafeAsyncQueue(loop, second_queue, dispatcher=dispatcher)
+
+        first_channel.put_nowait("first")
+        second_channel.put_nowait("second")
+
+        self.assertEqual(len(loop.callbacks), 1)
+        loop.callbacks[0]()
+        self.assertEqual(first_queue.get_nowait(), "first")
+        self.assertEqual(second_queue.get_nowait(), "second")
 
 
 class ThreadSafeAsyncQueueTests(unittest.IsolatedAsyncioTestCase):

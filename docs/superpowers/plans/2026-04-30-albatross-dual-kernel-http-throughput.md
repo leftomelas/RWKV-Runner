@@ -29,6 +29,15 @@ Observed uplift:
 
 The stream benchmark can hit transient TCP connection refused errors when 960 long-lived connections are opened at once from the same Python process. This happens before requests enter model generation; short `max_tokens=20` probes reproduce it. Treat connection refused counts separately from generation throughput, and use `--connect-retries` when measuring steady-state real HTTP generation throughput.
 
+After adding shared event-loop result dispatch, measured CUDA sampler results improved to:
+
+| Path | Result | Change vs previous CUDA |
+| --- | ---: | ---: |
+| Real HTTP non-stream | 3897.33 tok/s | +39.99% |
+| Real HTTP stream | 3298.82 tok/s | +41.94% |
+
+The internal profile showed why: `decode_output_enqueue_total_ms` dropped from roughly 4010 ms to 283 ms on a 960 concurrency, 60 token CUDA run. The optimization batches cross-thread `asyncio.Queue` puts across all completion result channels sharing the same event loop.
+
 Canonical real HTTP commands:
 
 ```powershell

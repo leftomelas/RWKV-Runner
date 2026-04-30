@@ -1,4 +1,5 @@
 import asyncio
+from collections import deque
 import queue
 import threading
 from typing import List, Dict, Any, Union, Tuple, Optional, Callable, AsyncIterator
@@ -28,29 +29,64 @@ class WorkerPerformanceInfo(TypedDict):
     profile: Dict[str, Any]
 
 
-class ThreadSafeAsyncQueue:
-    """桥接线程与 asyncio 的简易队列，确保跨线程 put 安全"""
+class EventLoopQueueDispatcher:
+    """Batch cross-thread queue puts into the target event loop."""
 
-    def __init__(self, event_loop: asyncio.AbstractEventLoop, queue: Optional[asyncio.Queue] = None):
+    def __init__(self, event_loop: asyncio.AbstractEventLoop):
         self.event_loop = event_loop
-        self.queue: asyncio.Queue = queue if queue is not None else asyncio.Queue()
+        self._pending = deque()
+        self._pending_lock = threading.Lock()
+        self._drain_scheduled = False
 
-    def put_nowait(self, item):
-        # 在事件循环线程中执行 put，避免跨线程直接操作 asyncio.Queue
+    def put_nowait(self, target_queue: asyncio.Queue, item) -> None:
         if self.event_loop.is_closed():
             return
 
-        def safe_put_nowait():
-            try:
-                self.queue.put_nowait(item)
-            except asyncio.QueueFull:
-                pass
+        with self._pending_lock:
+            self._pending.append((target_queue, item))
+            if self._drain_scheduled:
+                return
+            self._drain_scheduled = True
 
         try:
-            self.event_loop.call_soon_threadsafe(safe_put_nowait)
+            self.event_loop.call_soon_threadsafe(self._drain_pending)
         except RuntimeError:
-            # 事件循环已关闭或未运行，直接忽略
-            pass
+            with self._pending_lock:
+                self._pending.clear()
+                self._drain_scheduled = False
+
+    def _drain_pending(self) -> None:
+        while True:
+            with self._pending_lock:
+                if not self._pending:
+                    self._drain_scheduled = False
+                    return
+                items = list(self._pending)
+                self._pending.clear()
+
+            for target_queue, item in items:
+                try:
+                    target_queue.put_nowait(item)
+                except asyncio.QueueFull:
+                    pass
+
+
+class ThreadSafeAsyncQueue:
+    """桥接线程与 asyncio 的简易队列，确保跨线程 put 安全"""
+
+    def __init__(
+        self,
+        event_loop: asyncio.AbstractEventLoop,
+        queue: Optional[asyncio.Queue] = None,
+        dispatcher: Optional[EventLoopQueueDispatcher] = None,
+    ):
+        self.event_loop = event_loop
+        self.queue: asyncio.Queue = queue if queue is not None else asyncio.Queue()
+        self.dispatcher = dispatcher if dispatcher is not None else EventLoopQueueDispatcher(event_loop)
+
+    def put_nowait(self, item):
+        # 在事件循环线程中执行 put，避免跨线程直接操作 asyncio.Queue
+        self.dispatcher.put_nowait(self.queue, item)
 
     def empty(self) -> bool:
         return self.queue.empty()
@@ -77,6 +113,7 @@ class AsyncEngineCore:
 
         # 跨线程事件桥接
         self.worker_event_queue: Optional[ThreadSafeAsyncQueue] = None
+        self.queue_dispatcher: Optional[EventLoopQueueDispatcher] = None
 
         # 事件循环引用
         self.event_loop: Optional[asyncio.AbstractEventLoop] = None
@@ -115,7 +152,12 @@ class AsyncEngineCore:
             asyncio.set_event_loop(self.event_loop)
 
         # 初始化跨线程队列
-        self.worker_event_queue = ThreadSafeAsyncQueue(self.event_loop, asyncio.Queue(maxsize=worker_num * 100))
+        self.queue_dispatcher = EventLoopQueueDispatcher(self.event_loop)
+        self.worker_event_queue = ThreadSafeAsyncQueue(
+            self.event_loop,
+            asyncio.Queue(maxsize=worker_num * 100),
+            dispatcher=self.queue_dispatcher,
+        )
 
         self.is_initialized = True
 
@@ -241,7 +283,7 @@ class AsyncEngineCore:
             prefill_tokens = self.tokenizer.encode(prompt_str)
 
         # 跨线程输出桥：worker 线程 put，async 端 get
-        result_channel = ThreadSafeAsyncQueue(self.event_loop)
+        result_channel = ThreadSafeAsyncQueue(self.event_loop, dispatcher=self.queue_dispatcher)
 
         # 创建 AsyncEngineCompletion 对象
         completion = AsyncEngineCompletion(

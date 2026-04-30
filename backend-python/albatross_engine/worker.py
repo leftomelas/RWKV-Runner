@@ -491,12 +491,14 @@ class Worker:
             task.request_status = RequestStatus.FINISHED_STOPPED
             return None
 
-        new_text = self.tokenizer.decode([new_token], utf8_errors="ignore")  # TODO: 处理不完整的 utf8
+        with self.profile.time("decode_tokenizer_decode"):
+            new_text = self.tokenizer.decode([new_token], utf8_errors="ignore")  # TODO: 处理不完整的 utf8
 
         task.generated_tokens.append(new_token)
         task.decoded_texts.append(new_text)
 
-        task.output_queue.put_nowait(("token_generated", (new_token, new_text)))
+        with self.profile.time("decode_output_enqueue"):
+            task.output_queue.put_nowait(("token_generated", (new_token, new_text)))
 
         if len(task.generated_tokens) >= task.max_tokens:
             task.request_status = RequestStatus.FINISHED_LENGTH_CAPPED
@@ -804,23 +806,31 @@ class Worker:
                     if task_data["state_category"] == StateCategory.EMPTY:
                         continue
 
-                    if self._is_task_aborted(task_data):
-                        task_data["task"].request_status = RequestStatus.FINISHED_ABORTED
-                        task_data["state_category"] = StateCategory.FINISHED
+                    with self.profile.time("state_slot_abort_check"):
+                        is_aborted = self._is_task_aborted(task_data)
+
+                    if is_aborted:
+                        with self.profile.time("state_slot_mark_aborted"):
+                            task_data["task"].request_status = RequestStatus.FINISHED_ABORTED
+                            task_data["state_category"] = StateCategory.FINISHED
 
                     elif task_data["state_category"] == StateCategory.FORWARD_SEQ:
-                        self._handle_forward_seq(task_data, key)
+                        with self.profile.time("state_slot_handle_forward_seq"):
+                            self._handle_forward_seq(task_data, key)
 
                     elif task_data["state_category"] == StateCategory.FORWARD_ONE_PREFILL:
-                        self._handle_forward_one_prefill_phase(task_data, key)
+                        with self.profile.time("state_slot_handle_one_prefill"):
+                            self._handle_forward_one_prefill_phase(task_data, key)
 
                     elif task_data["state_category"] == StateCategory.FORWARD_ONE_DECODE:
-                        update_info = self._handle_forward_one_decode_phase(task_data, key)
+                        with self.profile.time("state_slot_handle_one_decode"):
+                            update_info = self._handle_forward_one_decode_phase(task_data, key)
                         if update_info is not None:
                             penalty_updates.append(update_info)
 
-                    if RequestStatus.is_finished(task_data["task"].request_status):
-                        accomplished_task_slot_pos.append(key)
+                    with self.profile.time("state_slot_finished_check"):
+                        if RequestStatus.is_finished(task_data["task"].request_status):
+                            accomplished_task_slot_pos.append(key)
 
             # 批量更新 penalty（原来是在循环内逐个更新）
             with self.profile.time("batch_update_penalty"):
