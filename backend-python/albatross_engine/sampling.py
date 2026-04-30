@@ -15,6 +15,10 @@ MyStatic = torch.jit.script
 # MyStatic = __nop
 
 
+_CUDA_RAND_STATE_BYTES = 64
+_CUDA_RAND_STATE_CACHE: dict[tuple[str, int | None], torch.Tensor] = {}
+
+
 @MyStatic
 def sample_logits_real_batch(
     logits: torch.Tensor,
@@ -117,6 +121,25 @@ def _cuda_sampler_available() -> bool:
     )
 
 
+def _setup_cuda_rand_states(seed: int, batch: int) -> torch.Tensor:
+    return torch.ops.rwkv7_state_fwd_fp16.setup_rand(seed, batch)
+
+
+def _cuda_rand_state_key(device: torch.device) -> tuple[str, int | None]:
+    return (device.type, device.index)
+
+
+def _get_cuda_rand_states(batch: int, device: torch.device) -> torch.Tensor:
+    required_elements = batch * _CUDA_RAND_STATE_BYTES
+    key = _cuda_rand_state_key(device)
+    cached = _CUDA_RAND_STATE_CACHE.get(key)
+    if cached is None or cached.numel() < required_elements:
+        seed = int(torch.randint(0, 2**31 - 1, (), device="cpu").item())
+        cached = _setup_cuda_rand_states(seed, batch)
+        _CUDA_RAND_STATE_CACHE[key] = cached
+    return cached[:required_elements]
+
+
 def _all_rows_equal(tensor: torch.Tensor) -> bool:
     if tensor.shape[0] <= 1:
         return True
@@ -153,8 +176,7 @@ def _sample_cuda_uniform(
 ) -> torch.Tensor:
     logits_fp32 = logits.float().contiguous()
     batch = logits_fp32.shape[0]
-    seed = int(torch.randint(0, 2**31 - 1, (), device="cpu").item())
-    states = torch.ops.rwkv7_state_fwd_fp16.setup_rand(seed, batch)
+    states = _get_cuda_rand_states(batch, logits_fp32.device)
     tokens = torch.ops.rwkv7_state_fwd_fp16.batch_sampling_temperature_topk_topp(
         logits_fp32,
         states,

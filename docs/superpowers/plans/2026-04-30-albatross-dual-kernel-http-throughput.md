@@ -38,6 +38,8 @@ After adding shared event-loop result dispatch, measured CUDA sampler results im
 
 The internal profile showed why: `decode_output_enqueue_total_ms` dropped from roughly 4010 ms to 283 ms on a 960 concurrency, 60 token CUDA run. The optimization batches cross-thread `asyncio.Queue` puts across all completion result channels sharing the same event loop.
 
+After caching CUDA sampler RNG states, the same internal CUDA profile showed `sampling_total_ms` drop from roughly 5683 ms to 5296 ms. Total wall time stayed within run-to-run noise, so this is a small sampler-path cleanup rather than the next major HTTP throughput win.
+
 Canonical real HTTP commands:
 
 ```powershell

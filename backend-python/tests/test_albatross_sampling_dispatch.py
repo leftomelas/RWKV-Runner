@@ -1,6 +1,21 @@
+import os
+
 import torch
 
 from albatross_engine import sampling
+
+
+def _set_env(name, value):
+    previous = os.environ.get(name)
+    os.environ[name] = value
+    return previous
+
+
+def _restore_env(name, previous):
+    if previous is None:
+        os.environ.pop(name, None)
+    else:
+        os.environ[name] = previous
 
 
 def _call_sampler(logits):
@@ -30,22 +45,36 @@ def test_python_sampler_dispatch_shape(monkeypatch=None):
 def test_greedy_sampler_dispatch_returns_argmax(monkeypatch=None):
     if monkeypatch is not None:
         monkeypatch.setenv("ALBATROSS_SAMPLER", "greedy")
+        restore = None
+    else:
+        restore = _set_env("ALBATROSS_SAMPLER", "greedy")
 
-    tokens = _call_sampler(torch.tensor([[1.0, 5.0, 2.0], [4.0, 3.0, 9.0]]))
+    try:
+        tokens = _call_sampler(torch.tensor([[1.0, 5.0, 2.0], [4.0, 3.0, 9.0]]))
 
-    assert tokens.tolist() == [1, 2]
+        assert tokens.tolist() == [1, 2]
+    finally:
+        if monkeypatch is None:
+            _restore_env("ALBATROSS_SAMPLER", restore)
 
 
 def test_unknown_sampler_mode_raises(monkeypatch=None):
     if monkeypatch is not None:
         monkeypatch.setenv("ALBATROSS_SAMPLER", "bad-mode")
+        restore = None
+    else:
+        restore = _set_env("ALBATROSS_SAMPLER", "bad-mode")
 
     try:
-        _call_sampler(torch.randn(2, 16))
-    except ValueError as exc:
-        assert "Unsupported ALBATROSS_SAMPLER" in str(exc)
-    else:
-        raise AssertionError("expected ValueError")
+        try:
+            _call_sampler(torch.randn(2, 16))
+        except ValueError as exc:
+            assert "Unsupported ALBATROSS_SAMPLER" in str(exc)
+        else:
+            raise AssertionError("expected ValueError")
+    finally:
+        if monkeypatch is None:
+            _restore_env("ALBATROSS_SAMPLER", restore)
 
 
 def test_all_rows_equal_detects_uniform_tensor():
@@ -61,7 +90,11 @@ def test_cuda_sampler_falls_back_when_op_missing(monkeypatch=None):
         monkeypatch.setenv("ALBATROSS_SAMPLER", "cuda")
         monkeypatch.setenv("ALBATROSS_SAMPLER_FALLBACK", "1")
         monkeypatch.setattr(sampling, "_cuda_sampler_available", lambda: False)
+        restore_sampler = None
+        restore_fallback = None
     else:
+        restore_sampler = _set_env("ALBATROSS_SAMPLER", "cuda")
+        restore_fallback = _set_env("ALBATROSS_SAMPLER_FALLBACK", "1")
         original_available = getattr(sampling, "_cuda_sampler_available", None)
         sampling._cuda_sampler_available = lambda: False
 
@@ -71,6 +104,8 @@ def test_cuda_sampler_falls_back_when_op_missing(monkeypatch=None):
     finally:
         if monkeypatch is None and original_available is not None:
             sampling._cuda_sampler_available = original_available
+            _restore_env("ALBATROSS_SAMPLER", restore_sampler)
+            _restore_env("ALBATROSS_SAMPLER_FALLBACK", restore_fallback)
 
 
 def test_cuda_sampler_falls_back_for_non_uniform_parameters(monkeypatch=None):
@@ -83,7 +118,11 @@ def test_cuda_sampler_falls_back_for_non_uniform_parameters(monkeypatch=None):
             "_sample_cuda_uniform",
             lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not call cuda")),
         )
+        restore_sampler = None
+        restore_fallback = None
     else:
+        restore_sampler = _set_env("ALBATROSS_SAMPLER", "cuda")
+        restore_fallback = _set_env("ALBATROSS_SAMPLER_FALLBACK", "1")
         original_available = sampling._cuda_sampler_available
         original_cuda = sampling._sample_cuda_uniform
         sampling._cuda_sampler_available = lambda: True
@@ -109,6 +148,8 @@ def test_cuda_sampler_falls_back_for_non_uniform_parameters(monkeypatch=None):
         if monkeypatch is None:
             sampling._cuda_sampler_available = original_available
             sampling._sample_cuda_uniform = original_cuda
+            _restore_env("ALBATROSS_SAMPLER", restore_sampler)
+            _restore_env("ALBATROSS_SAMPLER_FALLBACK", restore_fallback)
 
 
 def test_cuda_sampler_allows_non_uniform_penalty_tensors(monkeypatch=None):
@@ -117,7 +158,11 @@ def test_cuda_sampler_allows_non_uniform_penalty_tensors(monkeypatch=None):
         monkeypatch.setenv("ALBATROSS_SAMPLER_FALLBACK", "0")
         monkeypatch.setattr(sampling, "_cuda_sampler_available", lambda: True)
         monkeypatch.setattr(sampling, "_sample_cuda_uniform", lambda *args, **kwargs: torch.tensor([1, 2]))
+        restore_sampler = None
+        restore_fallback = None
     else:
+        restore_sampler = _set_env("ALBATROSS_SAMPLER", "cuda")
+        restore_fallback = _set_env("ALBATROSS_SAMPLER_FALLBACK", "0")
         original_available = sampling._cuda_sampler_available
         original_cuda = sampling._sample_cuda_uniform
         sampling._cuda_sampler_available = lambda: True
@@ -143,3 +188,34 @@ def test_cuda_sampler_allows_non_uniform_penalty_tensors(monkeypatch=None):
         if monkeypatch is None:
             sampling._cuda_sampler_available = original_available
             sampling._sample_cuda_uniform = original_cuda
+            _restore_env("ALBATROSS_SAMPLER", restore_sampler)
+            _restore_env("ALBATROSS_SAMPLER_FALLBACK", restore_fallback)
+
+
+def test_cuda_rand_states_are_reused_until_batch_grows(monkeypatch=None):
+    calls = []
+
+    def fake_setup(seed, batch):
+        calls.append((seed, batch))
+        return torch.empty(batch * sampling._CUDA_RAND_STATE_BYTES, dtype=torch.int8)
+
+    if monkeypatch is not None:
+        monkeypatch.setattr(sampling, "_setup_cuda_rand_states", fake_setup)
+    else:
+        original_setup = sampling._setup_cuda_rand_states
+        sampling._setup_cuda_rand_states = fake_setup
+
+    sampling._CUDA_RAND_STATE_CACHE.clear()
+    try:
+        first = sampling._get_cuda_rand_states(4, torch.device("cpu"))
+        second = sampling._get_cuda_rand_states(3, torch.device("cpu"))
+        third = sampling._get_cuda_rand_states(5, torch.device("cpu"))
+
+        assert first.numel() == 4 * sampling._CUDA_RAND_STATE_BYTES
+        assert second.numel() == 3 * sampling._CUDA_RAND_STATE_BYTES
+        assert third.numel() == 5 * sampling._CUDA_RAND_STATE_BYTES
+        assert [batch for _seed, batch in calls] == [4, 5]
+    finally:
+        sampling._CUDA_RAND_STATE_CACHE.clear()
+        if monkeypatch is None:
+            sampling._setup_cuda_rand_states = original_setup
