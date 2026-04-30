@@ -169,6 +169,8 @@ class Worker:
         self.frequency_penalty_tensor: torch.Tensor = None
         self.penalty_decay_tensor: torch.Tensor = None
         self.presence_penalty_tensor: torch.Tensor = None
+        self.slot_indices: torch.Tensor = None
+        self.no_penalty_token_mask: torch.Tensor = None
 
         self.no_penalty_token_ids = {33, 10, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58}
 
@@ -300,6 +302,17 @@ class Worker:
             dtype=torch.float32,
             device=self.batch_state[0].device,
         )
+        self.slot_indices = torch.arange(
+            self.real_state_size,
+            dtype=torch.long,
+            device=self.batch_state[0].device,
+        )
+        self.no_penalty_token_mask = torch.zeros(
+            self.model_config.vocab_size,
+            dtype=torch.bool,
+            device=self.batch_state[0].device,
+        )
+        self.no_penalty_token_mask[list(self.no_penalty_token_ids)] = True
 
 
     def _switch_batch(self, pos_a: int, pos_b: int):
@@ -477,19 +490,15 @@ class Worker:
             )
             task_data["prefill_cached"] = True
 
-    def _handle_forward_one_decode_phase(self, task_data: TaskData, slot_pos: int) -> Optional[Tuple[int, int, float]]:
+    def _handle_forward_one_decode_phase(self, task_data: TaskData, slot_pos: int) -> None:
         """处理 Decode 阶段
-        
-        Returns:
-            如果需要批量更新 penalty，返回 (slot_pos, new_token, weight)
-            否则返回 None
         """
         task = task_data["task"]
         new_token = task_data["new_token"]
 
         if new_token in task.stop_tokens:
             task.request_status = RequestStatus.FINISHED_STOPPED
-            return None
+            return
 
         with self.profile.time("decode_tokenizer_decode"):
             new_text = self.tokenizer.decode([new_token], utf8_errors="ignore")  # TODO: 处理不完整的 utf8
@@ -502,12 +511,10 @@ class Worker:
 
         if len(task.generated_tokens) >= task.max_tokens:
             task.request_status = RequestStatus.FINISHED_LENGTH_CAPPED
-            return None
+            return
         
-        # 返回需要批量更新的信息，而不是在这里直接更新
-        weight = 0.0 if new_token in self.no_penalty_token_ids else 1.0
         task_data["next_input_token"] = new_token
-        return (slot_pos, new_token, weight)
+        return
 
     def _is_task_aborted(self, task_data: TaskData):
         """检查任务是否打断"""
@@ -524,25 +531,21 @@ class Worker:
 
         return False
 
-    def _batch_update_penalty(self, penalty_updates: List[Tuple[int, int, float]]):
-        """批量更新 occurrence 和 alpha_presence_vector
-        
-        Args:
-            penalty_updates: List of (slot_pos, new_token, weight) tuples
-        """
-        if not penalty_updates:
+    def _update_penalty_from_tokens(
+        self,
+        decode_offset: Tuple[int, int],
+        new_tokens: torch.Tensor,
+    ) -> None:
+        """Update penalty tensors directly from sampled device tokens."""
+        if new_tokens.numel() == 0:
             return
-        
-        slots = torch.tensor([u[0] for u in penalty_updates], device=self.occurrence.device, dtype=torch.long)
-        tokens = torch.tensor([u[1] for u in penalty_updates], device=self.occurrence.device, dtype=torch.long)
-        weights = torch.tensor([u[2] for u in penalty_updates], device=self.occurrence.device, dtype=torch.float32)
-        
-        # 批量更新 occurrence: self.occurrence[slot_pos, new_token] += weight
+
+        decode_slice = slice(decode_offset[0], decode_offset[1])
+        slots = self.slot_indices[decode_slice]
+        tokens = new_tokens.to(device=self.occurrence.device, dtype=torch.long)
+        weights = (~self.no_penalty_token_mask[tokens]).to(dtype=self.occurrence.dtype)
+
         self.occurrence[slots, tokens] += weights
-        
-        # 批量更新 alpha_presence_vector: 
-        # self.alpha_presence_vector[[slot_pos], [new_token]] = self.presence_penalty_tensor[[slot_pos], :]
-        # presence_penalty_tensor 是 (batch, 1)，需要取对应 slot 的值
         presence_values = self.presence_penalty_tensor[slots, 0]
         self.alpha_presence_vector[slots, tokens] = presence_values
 
@@ -733,6 +736,9 @@ class Worker:
                     penalty_decay=self.penalty_decay_tensor[decode_slice, :],
                 )
 
+            with self.profile.time("sampling_penalty_update"):
+                self._update_penalty_from_tokens(decode_offset, new_tokens)
+
             for slot_pos in range(*decode_offset):
                 new_token = new_tokens[slot_pos - decode_offset[0]].item()
                 self.state_slot[slot_pos]["new_token"] = new_token
@@ -794,8 +800,6 @@ class Worker:
                 break
 
             accomplished_task_slot_pos: list[int] = []
-            penalty_updates: list[Tuple[int, int, float]] = []  # 收集需要批量更新的 penalty 数据
-
             with self.profile.time("state_slot_scan"):
                 for key, task_data in sorted(self.state_slot.items()):
 
@@ -824,17 +828,11 @@ class Worker:
 
                     elif task_data["state_category"] == StateCategory.FORWARD_ONE_DECODE:
                         with self.profile.time("state_slot_handle_one_decode"):
-                            update_info = self._handle_forward_one_decode_phase(task_data, key)
-                        if update_info is not None:
-                            penalty_updates.append(update_info)
+                            self._handle_forward_one_decode_phase(task_data, key)
 
                     with self.profile.time("state_slot_finished_check"):
                         if RequestStatus.is_finished(task_data["task"].request_status):
                             accomplished_task_slot_pos.append(key)
-
-            # 批量更新 penalty（原来是在循环内逐个更新）
-            with self.profile.time("batch_update_penalty"):
-                self._batch_update_penalty(penalty_updates)
 
             with self.profile.time("process_accomplished"):
                 self._process_accomplished_tasks(accomplished_task_slot_pos)

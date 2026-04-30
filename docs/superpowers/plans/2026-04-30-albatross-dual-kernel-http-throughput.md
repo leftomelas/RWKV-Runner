@@ -49,6 +49,8 @@ After a conservative `organize_batch` cleanup, keeping the original swap strateg
 
 The unsafe heap-based swap rewrite was tested and rejected because it increased `state_swap_total_ms` sharply. Keep future batch-layout work focused on reducing required swaps, not just making the swap planner asymptotically faster.
 
+Moving penalty updates to the sampled CUDA token tensor removed the old Python `penalty_updates` list and `batch_update_penalty` phase. In the 960 concurrency, 60 token internal profile, the old `batch_update_penalty_total_ms` around 1550-1600 ms was replaced by `sampling_penalty_update_total_ms` around 30 ms. Real HTTP impact was within run-to-run noise: non-stream measured 4003.47 tok/s and stream measured 3619.61 tok/s.
+
 Canonical real HTTP commands:
 
 ```powershell

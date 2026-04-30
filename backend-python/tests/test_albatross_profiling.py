@@ -86,9 +86,9 @@ def test_worker_decode_phase_profiles_token_decode_and_output_enqueue():
         "prefill_cached": False,
     }
 
-    update_info = worker._handle_forward_one_decode_phase(task_data, 3)
+    worker._handle_forward_one_decode_phase(task_data, 3)
     snapshot = worker.profile.snapshot(reset=False)
 
-    assert update_info == (3, 42, 1.0)
+    assert task_data["next_input_token"] == 42
     assert snapshot["timers"]["decode_tokenizer_decode"]["count"] == 1
     assert snapshot["timers"]["decode_output_enqueue"]["count"] == 1
