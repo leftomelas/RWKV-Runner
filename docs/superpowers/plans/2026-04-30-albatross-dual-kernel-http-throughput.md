@@ -10,6 +10,69 @@
 
 ---
 
+## Current Real HTTP Benchmark Baseline
+
+Measured on 2026-05-01 with `ALBATROSS_KERNEL_ARCH=sm80_compute80`, 1 Albatross worker, batch/concurrency/requests 960, `max_tokens=300`, `temperature=1.0`, `top_p=0.3`, `top_k=0`, and the long GPU batch inference prompt.
+
+| Path | Sampler | Result |
+| --- | --- | ---: |
+| Real HTTP non-stream | Python | 2201.94 tok/s |
+| Real HTTP non-stream | CUDA | 2784.08 tok/s |
+| Real HTTP stream | Python | 1813.44 tok/s |
+| Real HTTP stream | CUDA | 2324.10 tok/s |
+
+Observed uplift:
+
+- Non-stream CUDA vs Python: +26.44%.
+- Stream CUDA vs Python: +28.16%.
+- Non-stream CUDA vs previous 2344 tok/s ad-hoc result: +18.77%.
+
+The stream benchmark can hit transient TCP connection refused errors when 960 long-lived connections are opened at once from the same Python process. This happens before requests enter model generation; short `max_tokens=20` probes reproduce it. Treat connection refused counts separately from generation throughput, and use `--connect-retries` when measuring steady-state real HTTP generation throughput.
+
+Canonical real HTTP commands:
+
+```powershell
+cd C:\Users\josSt\_S\RWKV-Runner
+
+py310\python.exe backend-python\bench\albatross_real_http_benchmark.py `
+  --sampler python `
+  --sampler-fallback `
+  --kernel-arch sm80_compute80 `
+  --non-stream `
+  --concurrency 960 `
+  --requests 960 `
+  --max-tokens 300 `
+  --timeout 900
+
+py310\python.exe backend-python\bench\albatross_real_http_benchmark.py `
+  --sampler cuda `
+  --kernel-arch sm80_compute80 `
+  --non-stream `
+  --concurrency 960 `
+  --requests 960 `
+  --max-tokens 300 `
+  --timeout 900
+
+py310\python.exe backend-python\bench\albatross_real_http_benchmark.py `
+  --sampler python `
+  --sampler-fallback `
+  --kernel-arch sm80_compute80 `
+  --connect-retries 8 `
+  --concurrency 960 `
+  --requests 960 `
+  --max-tokens 300 `
+  --timeout 900
+
+py310\python.exe backend-python\bench\albatross_real_http_benchmark.py `
+  --sampler cuda `
+  --kernel-arch sm80_compute80 `
+  --connect-retries 8 `
+  --concurrency 960 `
+  --requests 960 `
+  --max-tokens 300 `
+  --timeout 900
+```
+
 ### Task 1: Dual Kernel Artifact Selection
 
 **Files:**

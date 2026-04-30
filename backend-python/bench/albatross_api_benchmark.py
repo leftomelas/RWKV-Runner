@@ -1,11 +1,20 @@
 import argparse
 import json
 import os
+import pathlib
 import statistics
+import sys
 import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+
+BACKEND_ROOT = pathlib.Path(__file__).resolve().parent.parent
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
+
+from bench.albatross_http_client import run_with_connect_retries
 
 
 NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -68,16 +77,6 @@ def post_stream_chat(url: str, payload: dict, timeout: float) -> dict:
             "wall_time": time.perf_counter() - started,
             "tokens": 0,
         }
-    except Exception as error:
-        return {
-            "ok": False,
-            "status": None,
-            "error": str(error),
-            "first_token_latency": None,
-            "wall_time": time.perf_counter() - started,
-            "tokens": 0,
-        }
-
 
 def post_non_stream_chat(url: str, payload: dict, timeout: float) -> dict:
     started = time.perf_counter()
@@ -114,15 +113,6 @@ def post_non_stream_chat(url: str, payload: dict, timeout: float) -> dict:
             "wall_time": time.perf_counter() - started,
             "tokens": 0,
         }
-    except Exception as error:
-        return {
-            "ok": False,
-            "status": None,
-            "error": str(error),
-            "first_token_latency": None,
-            "wall_time": time.perf_counter() - started,
-            "tokens": 0,
-        }
 
 
 def percentile(values: list[float], pct: float) -> float:
@@ -131,6 +121,33 @@ def percentile(values: list[float], pct: float) -> float:
     values = sorted(values)
     index = min(len(values) - 1, int(round((len(values) - 1) * pct)))
     return values[index]
+
+
+def run_chat_request(
+    post_chat,
+    url: str,
+    payload: dict,
+    timeout: float,
+    connect_retries: int,
+    connect_retry_delay: float,
+) -> dict:
+    started = time.perf_counter()
+    try:
+        return run_with_connect_retries(
+            lambda: post_chat(url, payload, timeout),
+            connect_retries=connect_retries,
+            connect_retry_delay=connect_retry_delay,
+        )
+    except Exception as error:
+        return {
+            "ok": False,
+            "status": None,
+            "error": str(error),
+            "first_token_latency": None,
+            "wall_time": time.perf_counter() - started,
+            "tokens": 0,
+            "attempts": getattr(error, "attempts", 1),
+        }
 
 
 def main() -> int:
@@ -143,6 +160,18 @@ def main() -> int:
     parser.add_argument("--requests", type=int, default=16)
     parser.add_argument("--max-tokens", type=int, default=64)
     parser.add_argument("--timeout", type=float, default=600)
+    parser.add_argument(
+        "--connect-retries",
+        type=int,
+        default=0,
+        help="retry only TCP connection refused errors before counting a request failed",
+    )
+    parser.add_argument(
+        "--connect-retry-delay",
+        type=float,
+        default=0.05,
+        help="base retry delay in seconds; attempt N sleeps delay*N",
+    )
     parser.add_argument(
         "--non-stream",
         action="store_true",
@@ -190,7 +219,15 @@ def main() -> int:
     post_chat = post_non_stream_chat if args.non_stream else post_stream_chat
     with ThreadPoolExecutor(max_workers=args.concurrency) as executor:
         futures = [
-            executor.submit(post_chat, url, payload, args.timeout)
+            executor.submit(
+                run_chat_request,
+                post_chat,
+                url,
+                payload,
+                args.timeout,
+                args.connect_retries,
+                args.connect_retry_delay,
+            )
             for _ in range(args.requests)
         ]
         for future in as_completed(futures):
@@ -221,6 +258,10 @@ def main() -> int:
     print(f"total tokens: {total_tokens}")
     print(f"total wall time: {total_wall:.3f}s")
     print(f"aggregate tokens/s: {total_tokens / total_wall if total_wall else 0:.2f}")
+    retry_results = [result for result in results if result.get("attempts", 1) > 1]
+    if retry_results:
+        print(f"requests retried after connection refused: {len(retry_results)}")
+        print(f"max attempts: {max(result.get('attempts', 1) for result in results)}")
     if latencies:
         print(f"first token latency avg: {statistics.mean(latencies):.3f}s")
         print(f"first token latency p50: {percentile(latencies, 0.50):.3f}s")
