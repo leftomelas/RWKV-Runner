@@ -67,6 +67,12 @@ class FakeAsyncAlbatross:
 
 
 class AlbatrossCompletionContractTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncTearDown(self):
+        completion.ALBATROSS_DISCONNECT_CHECK_INTERVAL = 64
+
+    def test_albatross_disconnect_polling_default_is_less_aggressive(self):
+        self.assertEqual(completion.ALBATROSS_DISCONNECT_CHECK_INTERVAL, 64)
+
     async def test_albatross_profile_accumulator_tracks_route_costs(self):
         profiler = completion.AlbatrossProfileAccumulator()
 
@@ -156,6 +162,25 @@ class AlbatrossCompletionContractTests(unittest.IsolatedAsyncioTestCase):
             chunks.append(chunk)
 
         self.assertLessEqual(request._calls, 4)
+        self.assertEqual(chunks[-1], "[DONE]")
+
+    async def test_eval_albatross_uses_configurable_disconnect_polling_interval(self):
+        completion.ALBATROSS_DISCONNECT_CHECK_INTERVAL = 4
+        body = completion.ChatCompletionBody(messages=[])
+        events = [
+            ("text", "x" * index, "x", 3, index)
+            for index in range(1, 10)
+        ]
+        model = FakeAlbatross(events)
+        request = FakeRequest()
+
+        chunks = []
+        async for chunk in completion.eval_albatross(
+            model, request, body, "prompt", True, None, None, True
+        ):
+            chunks.append(chunk)
+
+        self.assertEqual(request._calls, 4)
         self.assertEqual(chunks[-1], "[DONE]")
 
     async def test_eval_dispatches_albatross_without_waiting_on_completion_lock(self):

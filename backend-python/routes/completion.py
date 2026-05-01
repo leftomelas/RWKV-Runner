@@ -125,7 +125,17 @@ completion_lock = Lock()
 
 requests_num = 0
 
-ALBATROSS_DISCONNECT_CHECK_INTERVAL = 8
+def get_albatross_disconnect_check_interval() -> int:
+    value = os.environ.get("ALBATROSS_DISCONNECT_CHECK_INTERVAL")
+    if value is None:
+        return 64
+    try:
+        return max(1, int(value))
+    except ValueError:
+        return 64
+
+
+ALBATROSS_DISCONNECT_CHECK_INTERVAL = get_albatross_disconnect_check_interval()
 
 
 def dumps_stream_chunk(payload: dict) -> str:

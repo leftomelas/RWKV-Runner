@@ -53,18 +53,21 @@ Moving penalty updates to the sampled CUDA token tensor removed the old Python `
 
 Batching sampled token transfer from CUDA to CPU reduced scalar synchronization overhead in `_run_forward_one()`. On the 960 concurrency, 60 token internal profile, throughput improved from 2709.05 tok/s to 3055.91 tok/s. On the full 300-token benchmarks, internal throughput improved from 4259.82 tok/s to 5084.47 tok/s, and real HTTP non-stream improved from 4003.47 tok/s to 4945.54 tok/s. Real HTTP stream remained effectively flat at 3585.70 tok/s, with its server profile dominated by stream/yield overhead.
 
-Final 300-token CUDA sampler baseline after the P0/P1 changes:
+Reducing Albatross stream disconnect polling from every 8 tokens to every 64 tokens improved real HTTP stream from 3585.70 tok/s to 3911.94 tok/s, with 960 ok and 0 failed. Server profile `disconnect_check_ms` dropped from roughly 12.37M ms to 1.65M ms, an 86.63% reduction. The remaining dominant stream overhead is `yield_resume_ms`, measured at roughly 53.60M ms in the same run.
+
+Current 300-token CUDA sampler baseline after the P0/P1 changes:
 
 | Path | Result | Notes |
 | --- | ---: | --- |
 | Internal AsyncEngineCore | 5084.47 tok/s | 960 requests, 960 concurrency, 300 max tokens |
 | Real HTTP non-stream | 4945.54 tok/s | 960 ok, 0 failed |
-| Real HTTP stream | 3585.70 tok/s | 960 ok, 0 failed |
+| Real HTTP stream | 3911.94 tok/s | 960 ok, 0 failed |
 
 Compared with the starting points listed in the performance design notes:
 
 - Internal Python backend: 2874.95 tok/s -> 5084.47 tok/s, +76.85%.
 - Real HTTP non-stream: 2344 tok/s -> 4945.54 tok/s, +110.99%.
+- Real HTTP stream CUDA baseline: 2324.10 tok/s -> 3911.94 tok/s, +68.32%.
 - C++ HTTP reference: 6083.75 tok/s, so the optimized Python HTTP non-stream path is about 81.3% of that reference.
 - C++ native reference: 8168.33 tok/s, so the optimized Python internal path is about 62.2% of that reference.
 
@@ -357,20 +360,20 @@ Then run API streaming and non-streaming benchmarks with the same `max_tokens`. 
 - Modify: `backend-python/routes/completion.py`
 - Modify: `backend-python/tests/test_albatross_completion_contract.py`
 
-- [ ] **Step 1: Write tests for reduced disconnect polling**
+- [x] **Step 1: Write tests for reduced disconnect polling**
 
 Add a fake request test where 10 streamed tokens produce fewer than 12 `is_disconnected()` calls when the poll interval is 8. This test should call `eval_albatross()` and assert the stream still ends with `[DONE]`.
 
-- [ ] **Step 2: Implement Albatross disconnect polling throttle**
+- [x] **Step 2: Implement Albatross disconnect polling throttle**
 
-In `eval_albatross()`, replace per-token `await request.is_disconnected()` with a helper:
+In `eval_albatross()`, avoid per-token `await request.is_disconnected()` with a configurable helper:
 
 ```python
 async def should_abort_after_token(token_index: int):
-    return token_index == 1 or token_index % 8 == 0
+    return token_index == 1 or token_index % ALBATROSS_DISCONNECT_CHECK_INTERVAL == 0
 ```
 
-Check disconnect only at those intervals and in `finally`.
+The default interval is 64 tokens and can be overridden with `ALBATROSS_DISCONNECT_CHECK_INTERVAL`. Check disconnect only at those intervals and in `finally`.
 
 - [ ] **Step 3: Write tests for pre-encoded streaming chunks**
 
