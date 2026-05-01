@@ -74,7 +74,9 @@ Compared with the starting points listed in the performance design notes:
 - C++ HTTP reference: 6083.75 tok/s, so the optimized Python HTTP stream path is about 76.3% of that reference.
 - C++ native reference: 8168.33 tok/s, so the optimized Python internal path is about 62.2% of that reference.
 
-Measured sm120 on the same benchmark shape after the HTTP stream optimizations. It loaded successfully and exposed the fused sampler ops, but was slower than sm80_compute80 in this setup: internal -4.31%, real HTTP non-stream -3.28%, and real HTTP stream -2.92%. Keep `ALBATROSS_KERNEL_ARCH=sm80_compute80` as the current measured performance choice unless a future sm120 kernel revision changes this result.
+Measured sm120 on the same benchmark shape after the HTTP stream optimizations. It loaded successfully and exposed the fused sampler ops, but was slower than sm80_compute80 in this setup: internal -4.31%, real HTTP non-stream -3.28%, and real HTTP stream -2.92%. The loader now treats `sm80_compute80` as the default preferred kernel when it is compatible and present; `ALBATROSS_KERNEL_ARCH=sm120` still forces the native sm120 artifact for comparison runs.
+
+Active state layout has only received the conservative `organize_batch` cleanup so far: avoiding list membership scans and sorted dict iteration while keeping the existing slot/state swap model. A full active-layout rewrite has not been implemented. Current profiles still show measurable `state_slot_scan`, `organize_batch`, and `state_swap` cost, but the larger remaining gap is tied to the forward kernel/state layout and sampling path. Treat full active state layout work as a larger design item, preferably evaluated together with the future `faster2_251201` reference rather than as an isolated Python-side reshuffle.
 
 Canonical real HTTP commands:
 

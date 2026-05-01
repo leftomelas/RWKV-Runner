@@ -9,6 +9,9 @@ import sysconfig
 import torch
 
 
+DEFAULT_PREFERRED_KERNEL_ARCH = "sm80_compute80"
+
+
 @dataclass(frozen=True)
 class RuntimeKernelContext:
     torch_version: str
@@ -50,6 +53,12 @@ def _normalize_forced_arch(forced_arch: str | None) -> str | None:
     return forced_arch.strip().lower().replace(";", "_").replace(",", "_")
 
 
+def _arch_preference_rank(entry_arches: list[str], preferred_arch: str | None) -> int:
+    if not preferred_arch:
+        return 1
+    return 0 if _arch_key(entry_arches) == _normalize_forced_arch(preferred_arch) else 1
+
+
 def _arch_rank(entry_arches: list[str], runtime_arch: str) -> tuple[int, int]:
     if runtime_arch in entry_arches:
         return (0, 0)
@@ -73,6 +82,7 @@ def find_precompiled_kernel(
     manifest_path: Path,
     context: RuntimeKernelContext,
     forced_arch: str | None = None,
+    preferred_arch: str | None = None,
 ) -> Path | None:
     if not manifest_path.is_file():
         return None
@@ -98,7 +108,16 @@ def find_precompiled_kernel(
             continue
         candidate = manifest_path.parent / entry["path"]
         if candidate.is_file():
-            candidates.append((_arch_rank(entry_arches, context.cuda_arch), candidate))
+            candidates.append((
+                (
+                    _arch_preference_rank(
+                        entry_arches,
+                        None if forced_arch_key else preferred_arch,
+                    ),
+                    *_arch_rank(entry_arches, context.cuda_arch),
+                ),
+                candidate,
+            ))
     if not candidates:
         return None
     candidates.sort(key=lambda item: item[0])
@@ -141,6 +160,7 @@ def load_precompiled_kernel_if_available(manifest_path: Path) -> bool:
         manifest_path,
         current_runtime_context(),
         forced_arch=os.environ.get("ALBATROSS_KERNEL_ARCH"),
+        preferred_arch=DEFAULT_PREFERRED_KERNEL_ARCH,
     )
     if kernel_path is None:
         return False

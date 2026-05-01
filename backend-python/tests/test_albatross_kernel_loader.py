@@ -4,11 +4,14 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from albatross.kernel_loader import (
+    DEFAULT_PREFERRED_KERNEL_ARCH,
     RuntimeKernelContext,
     extension_build_options,
     find_precompiled_kernel,
+    load_precompiled_kernel_if_available,
     validate_python_extension_build_environment,
 )
 
@@ -270,6 +273,144 @@ class AlbatrossKernelLoaderTests(unittest.TestCase):
             )
 
             self.assertEqual(result, fallback)
+
+    def test_find_precompiled_kernel_uses_preferred_arch_when_available(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            preferred = (
+                root
+                / "torch-2.7.1+cu128"
+                / "win_amd64"
+                / "cp310"
+                / "sm80_compute80"
+                / "rwkv7_state_fwd_fp16.pyd"
+            )
+            exact = (
+                root
+                / "torch-2.7.1+cu128"
+                / "win_amd64"
+                / "cp310"
+                / "sm120"
+                / "rwkv7_state_fwd_fp16.pyd"
+            )
+            preferred.parent.mkdir(parents=True)
+            exact.parent.mkdir(parents=True)
+            preferred.write_bytes(b"preferred")
+            exact.write_bytes(b"exact")
+            manifest = root / "manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "kernels": [
+                            {
+                                "name": "rwkv7_state_fwd_fp16",
+                                "torch": "2.7.1+cu128",
+                                "cuda": "12.8",
+                                "python_abi": "cp310",
+                                "platform": "win_amd64",
+                                "arch": ["sm120"],
+                                "path": exact.relative_to(root).as_posix(),
+                                "source": "local-build",
+                            },
+                            {
+                                "name": "rwkv7_state_fwd_fp16",
+                                "torch": "2.7.1+cu128",
+                                "cuda": "12.8",
+                                "python_abi": "cp310",
+                                "platform": "win_amd64",
+                                "arch": ["sm80", "compute80"],
+                                "path": preferred.relative_to(root).as_posix(),
+                                "source": "local-build",
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = find_precompiled_kernel(
+                manifest,
+                RuntimeKernelContext(
+                    torch_version="2.7.1+cu128",
+                    cuda_version="12.8",
+                    python_abi="cp310",
+                    platform_tag="win_amd64",
+                    cuda_arch="sm120",
+                ),
+                preferred_arch=DEFAULT_PREFERRED_KERNEL_ARCH,
+            )
+
+            self.assertEqual(result, preferred)
+
+    def test_load_precompiled_kernel_prefers_sm80_compute80_by_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            preferred = (
+                root
+                / "torch-2.7.1+cu128"
+                / "win_amd64"
+                / "cp310"
+                / "sm80_compute80"
+                / "rwkv7_state_fwd_fp16.pyd"
+            )
+            exact = (
+                root
+                / "torch-2.7.1+cu128"
+                / "win_amd64"
+                / "cp310"
+                / "sm120"
+                / "rwkv7_state_fwd_fp16.pyd"
+            )
+            preferred.parent.mkdir(parents=True)
+            exact.parent.mkdir(parents=True)
+            preferred.write_bytes(b"preferred")
+            exact.write_bytes(b"exact")
+            manifest = root / "manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "kernels": [
+                            {
+                                "name": "rwkv7_state_fwd_fp16",
+                                "torch": "2.7.1+cu128",
+                                "cuda": "12.8",
+                                "python_abi": "cp310",
+                                "platform": "win_amd64",
+                                "arch": ["sm120"],
+                                "path": exact.relative_to(root).as_posix(),
+                                "source": "local-build",
+                            },
+                            {
+                                "name": "rwkv7_state_fwd_fp16",
+                                "torch": "2.7.1+cu128",
+                                "cuda": "12.8",
+                                "python_abi": "cp310",
+                                "platform": "win_amd64",
+                                "arch": ["sm80", "compute80"],
+                                "path": preferred.relative_to(root).as_posix(),
+                                "source": "local-build",
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            context = RuntimeKernelContext(
+                torch_version="2.7.1+cu128",
+                cuda_version="12.8",
+                python_abi="cp310",
+                platform_tag="win_amd64",
+                cuda_arch="sm120",
+            )
+            with mock.patch.dict(os.environ, {}, clear=True):
+                with mock.patch("albatross.kernel_loader.torch.cuda.is_available", return_value=True):
+                    with mock.patch("albatross.kernel_loader.current_runtime_context", return_value=context):
+                        with mock.patch("albatross.kernel_loader.torch.ops.load_library") as load_library:
+                            loaded = load_precompiled_kernel_if_available(manifest)
+
+            self.assertTrue(loaded)
+            load_library.assert_called_once_with(str(preferred))
 
     def test_extension_build_options_uses_python_include_and_lib_env(self):
         with tempfile.TemporaryDirectory() as tmp:
