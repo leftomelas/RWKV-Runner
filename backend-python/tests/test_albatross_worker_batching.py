@@ -67,3 +67,18 @@ def test_update_penalty_from_tokens_uses_device_tokens_and_slot_indices():
     assert torch.allclose(worker.alpha_presence_vector[1, 10], torch.tensor(0.2))
     assert torch.allclose(worker.alpha_presence_vector[2, 11], torch.tensor(0.3))
     assert torch.allclose(worker.alpha_presence_vector[3, 12], torch.tensor(0.4))
+
+
+def test_store_new_tokens_accepts_batched_token_list():
+    worker = Worker.__new__(Worker)
+    worker.state_slot = {
+        2: {"new_token": None},
+        3: {"new_token": None},
+        4: {"new_token": None},
+    }
+
+    worker._store_new_tokens((2, 5), [10, 11, 12])
+
+    assert worker.state_slot[2]["new_token"] == 10
+    assert worker.state_slot[3]["new_token"] == 11
+    assert worker.state_slot[4]["new_token"] == 12

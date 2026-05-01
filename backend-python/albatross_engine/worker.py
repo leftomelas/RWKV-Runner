@@ -549,6 +549,14 @@ class Worker:
         presence_values = self.presence_penalty_tensor[slots, 0]
         self.alpha_presence_vector[slots, tokens] = presence_values
 
+    def _store_new_tokens(
+        self,
+        decode_offset: Tuple[int, int],
+        new_tokens: List[int],
+    ) -> None:
+        for slot_pos, new_token in zip(range(*decode_offset), new_tokens):
+            self.state_slot[slot_pos]["new_token"] = new_token
+
     def _process_accomplished_tasks(self, accomplished_task_slot_pos: List[int]):
         """处理已完成的任务"""
 
@@ -739,9 +747,9 @@ class Worker:
             with self.profile.time("sampling_penalty_update"):
                 self._update_penalty_from_tokens(decode_offset, new_tokens)
 
-            for slot_pos in range(*decode_offset):
-                new_token = new_tokens[slot_pos - decode_offset[0]].item()
-                self.state_slot[slot_pos]["new_token"] = new_token
+            with self.profile.time("sampling_token_transfer"):
+                new_token_list = new_tokens.cpu().tolist()
+            self._store_new_tokens(decode_offset, new_token_list)
 
         del out
 
