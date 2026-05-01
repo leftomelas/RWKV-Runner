@@ -62,15 +62,15 @@ Current 300-token CUDA sampler baseline after the P0/P1 changes:
 | Path | Result | Notes |
 | --- | ---: | --- |
 | Internal AsyncEngineCore | 5084.47 tok/s | 960 requests, 960 concurrency, 300 max tokens |
-| Real HTTP non-stream | 4945.54 tok/s | 960 ok, 0 failed |
+| Real HTTP non-stream | 4871.64 tok/s | 960 ok, 0 failed; previous best 4945.54 tok/s |
 | Real HTTP stream | 4644.13 tok/s | 960 ok, 0 failed |
 
 Compared with the starting points listed in the performance design notes:
 
 - Internal Python backend: 2874.95 tok/s -> 5084.47 tok/s, +76.85%.
-- Real HTTP non-stream: 2344 tok/s -> 4945.54 tok/s, +110.99%.
+- Real HTTP non-stream: 2344 tok/s -> 4871.64 tok/s, +107.83%.
 - Real HTTP stream CUDA baseline: 2324.10 tok/s -> 4644.13 tok/s, +99.82%.
-- C++ HTTP reference: 6083.75 tok/s, so the optimized Python HTTP non-stream path is about 81.3% of that reference.
+- C++ HTTP reference: 6083.75 tok/s, so the optimized Python HTTP non-stream path is about 80.1% of that reference.
 - C++ HTTP reference: 6083.75 tok/s, so the optimized Python HTTP stream path is about 76.3% of that reference.
 - C++ native reference: 8168.33 tok/s, so the optimized Python internal path is about 62.2% of that reference.
 
