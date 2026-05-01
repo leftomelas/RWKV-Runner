@@ -59,11 +59,11 @@ Switching the Albatross stream path from `EventSourceResponse` to direct pre-fra
 
 Current 300-token CUDA sampler baseline after the P0/P1 changes:
 
-| Path | Result | Notes |
-| --- | ---: | --- |
-| Internal AsyncEngineCore | 5084.47 tok/s | 960 requests, 960 concurrency, 300 max tokens |
-| Real HTTP non-stream | 4871.64 tok/s | 960 ok, 0 failed; previous best 4945.54 tok/s |
-| Real HTTP stream | 4644.13 tok/s | 960 ok, 0 failed |
+| Path | sm80_compute80 | sm120 | Notes |
+| --- | ---: | ---: | --- |
+| Internal AsyncEngineCore | 5084.47 tok/s | 4865.21 tok/s | 960 requests, 960 concurrency, 300 max tokens |
+| Real HTTP non-stream | 4871.64 tok/s | 4711.70 tok/s | 960 ok, 0 failed; sm80 previous best 4945.54 tok/s |
+| Real HTTP stream | 4644.13 tok/s | 4508.44 tok/s | 960 ok, 0 failed |
 
 Compared with the starting points listed in the performance design notes:
 
@@ -73,6 +73,8 @@ Compared with the starting points listed in the performance design notes:
 - C++ HTTP reference: 6083.75 tok/s, so the optimized Python HTTP non-stream path is about 80.1% of that reference.
 - C++ HTTP reference: 6083.75 tok/s, so the optimized Python HTTP stream path is about 76.3% of that reference.
 - C++ native reference: 8168.33 tok/s, so the optimized Python internal path is about 62.2% of that reference.
+
+Measured sm120 on the same benchmark shape after the HTTP stream optimizations. It loaded successfully and exposed the fused sampler ops, but was slower than sm80_compute80 in this setup: internal -4.31%, real HTTP non-stream -3.28%, and real HTTP stream -2.92%. Keep `ALBATROSS_KERNEL_ARCH=sm80_compute80` as the current measured performance choice unless a future sm120 kernel revision changes this result.
 
 Canonical real HTTP commands:
 
@@ -421,7 +423,7 @@ Run:
 
 Expected: `rwkv7 import ok`.
 
-- [ ] **Step 3: Benchmark sm120 HTTP path after optimization**
+- [x] **Step 3: Benchmark sm120 HTTP path after optimization**
 
 Start backend with:
 
