@@ -124,7 +124,7 @@ py310\python.exe backend-python\bench\albatross_real_http_benchmark.py `
 - Modify: `backend-python/albatross/kernel_loader.py`
 - Modify: `backend-python/tests/test_albatross_kernel_loader.py`
 
-- [ ] **Step 1: Write failing tests for exact-arch priority and forced arch selection**
+- [x] **Step 1: Write failing tests for exact-arch priority and forced arch selection**
 
 Add tests that create two manifest entries with the same runtime context:
 
@@ -172,7 +172,7 @@ def test_find_precompiled_kernel_honors_forced_kernel_arch(self):
         self.assertEqual(result, fallback)
 ```
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run:
 
@@ -182,7 +182,7 @@ Run:
 
 Expected: tests fail because `find_precompiled_kernel()` has no `forced_arch` parameter and does not rank exact matches.
 
-- [ ] **Step 3: Implement ranked manifest selection**
+- [x] **Step 3: Implement ranked manifest selection**
 
 Update `find_precompiled_kernel()` to:
 
@@ -200,7 +200,7 @@ def _arch_score(entry_arches: list[str], runtime_arch: str) -> int:
 
 Then collect compatible candidates, filter by `forced_arch` when provided, and return the lowest score. `load_precompiled_kernel_if_available()` should pass `os.environ.get("ALBATROSS_KERNEL_ARCH")`.
 
-- [ ] **Step 4: Run tests and verify GREEN**
+- [x] **Step 4: Run tests and verify GREEN**
 
 Run:
 
@@ -220,7 +220,7 @@ Expected: all loader tests pass.
 - Add later after local build: `backend-python/albatross/kernels/torch-2.7.1+cu128/win_amd64/cp310/sm80_compute80/rwkv7_state_fwd_fp16.pyd`
 - Delete after migration: `backend-python/albatross/kernels/torch-2.7.1+cu128/win_amd64/cp310/rwkv7_state_fwd_fp16.pyd`
 
-- [ ] **Step 1: Write failing tests for artifact arch directory and manifest replacement scope**
+- [x] **Step 1: Write failing tests for artifact arch directory and manifest replacement scope**
 
 Add tests:
 
@@ -248,7 +248,7 @@ def test_update_manifest_replaces_matching_arch_context_only(self):
         self.assertEqual(len(kernels), 2)
 ```
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run:
 
@@ -258,7 +258,7 @@ Run:
 
 Expected: tests fail because `arch_directory_name()` does not exist and manifest replacement currently ignores `arch`.
 
-- [ ] **Step 3: Implement arch-specific output paths**
+- [x] **Step 3: Implement arch-specific output paths**
 
 Add:
 
@@ -281,7 +281,7 @@ relative_library = (
 
 Change `update_manifest.same_context()` keys to include `"arch"`.
 
-- [ ] **Step 4: Move committed sm120 artifact into the new path**
+- [x] **Step 4: Move committed sm120 artifact into the new path**
 
 Use PowerShell move/copy commands only after verifying paths:
 
@@ -292,7 +292,7 @@ Move-Item backend-python\albatross\kernels\torch-2.7.1+cu128\win_amd64\cp310\rwk
 
 Update `manifest.json` to point at the `sm120/` path.
 
-- [ ] **Step 5: Build and register sm80_compute80**
+- [x] **Step 5: Build and register sm80_compute80**
 
 Run:
 
@@ -303,7 +303,7 @@ cmd /c backend-python\scripts\build_albatross_kernel_vs2022.cmd
 
 Expected: build succeeds and creates the `sm80_compute80/` artifact without overwriting `sm120/`.
 
-- [ ] **Step 6: Run build and loader tests**
+- [x] **Step 6: Run build and loader tests**
 
 Run:
 
@@ -319,7 +319,7 @@ Expected: all tests pass.
 - Modify: `backend-python/bench/albatross_api_benchmark.py`
 - Add: `backend-python/bench/albatross_internal_benchmark.py`
 
-- [ ] **Step 1: Add benchmark options for stop behavior and non-streaming**
+- [x] **Step 1: Add benchmark options for stop behavior and non-streaming**
 
 Extend `albatross_api_benchmark.py` with:
 
@@ -331,7 +331,7 @@ parser.add_argument("--count-chunks", action="store_true")
 
 When `--no-stop` is set, send `"stop_token_ids": []` and `"stop": []` if accepted by the schema. When `--non-stream` is set, post `"stream": False` and count usage `completion_tokens` if returned.
 
-- [ ] **Step 2: Add internal benchmark file matching the previous ad-hoc script**
+- [x] **Step 2: Add internal benchmark file matching the previous ad-hoc script**
 
 Create `backend-python/bench/albatross_internal_benchmark.py` with CLI args:
 
@@ -386,7 +386,7 @@ Verify streaming output is still JSON-compatible and final `[DONE]` is present.
 
 Use `json.dumps(payload, separators=(",", ":"))` in the Albatross streaming path to reduce payload size and CPU work. Keep non-streaming response dictionaries unchanged for compatibility. For Albatross stream responses, pre-frame the compact chunks as SSE bytes and serve them with `StreamingResponse`.
 
-- [ ] **Step 5: Run contract tests**
+- [x] **Step 5: Run contract tests**
 
 Run:
 
@@ -401,7 +401,7 @@ Expected: all contract tests pass.
 **Files:**
 - No new source files beyond previous tasks.
 
-- [ ] **Step 1: Run focused unit tests**
+- [x] **Step 1: Run focused unit tests**
 
 Run:
 
@@ -411,7 +411,7 @@ Run:
 
 Expected: all tests pass.
 
-- [ ] **Step 2: Import selected kernel**
+- [x] **Step 2: Import selected kernel**
 
 Run:
 
