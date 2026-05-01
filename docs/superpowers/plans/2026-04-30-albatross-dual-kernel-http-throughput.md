@@ -53,7 +53,9 @@ Moving penalty updates to the sampled CUDA token tensor removed the old Python `
 
 Batching sampled token transfer from CUDA to CPU reduced scalar synchronization overhead in `_run_forward_one()`. On the 960 concurrency, 60 token internal profile, throughput improved from 2709.05 tok/s to 3055.91 tok/s. On the full 300-token benchmarks, internal throughput improved from 4259.82 tok/s to 5084.47 tok/s, and real HTTP non-stream improved from 4003.47 tok/s to 4945.54 tok/s. Real HTTP stream remained effectively flat at 3585.70 tok/s, with its server profile dominated by stream/yield overhead.
 
-Reducing Albatross stream disconnect polling from every 8 tokens to every 64 tokens improved real HTTP stream from 3585.70 tok/s to 3911.94 tok/s, with 960 ok and 0 failed. Server profile `disconnect_check_ms` dropped from roughly 12.37M ms to 1.65M ms, an 86.63% reduction. The remaining dominant stream overhead is `yield_resume_ms`, measured at roughly 53.60M ms in the same run.
+Reducing Albatross stream disconnect polling from every 8 tokens to every 64 tokens improved real HTTP stream from 3585.70 tok/s to 3911.94 tok/s, with 960 ok and 0 failed. Server profile `disconnect_check_ms` dropped from roughly 12.37M ms to 1.65M ms, an 86.63% reduction.
+
+Switching the Albatross stream path from `EventSourceResponse` to direct pre-framed SSE bytes through `StreamingResponse` improved real HTTP stream again from 3911.94 tok/s to 4644.13 tok/s, with 960 ok and 0 failed. This keeps one SSE event per generated token, but removes the framework's per-event SSE serialization path. In the same run, `yield_resume_ms` dropped from roughly 53.60M ms to 10.13K ms; the dominant route time moved to waiting for model completions.
 
 Current 300-token CUDA sampler baseline after the P0/P1 changes:
 
@@ -61,14 +63,15 @@ Current 300-token CUDA sampler baseline after the P0/P1 changes:
 | --- | ---: | --- |
 | Internal AsyncEngineCore | 5084.47 tok/s | 960 requests, 960 concurrency, 300 max tokens |
 | Real HTTP non-stream | 4945.54 tok/s | 960 ok, 0 failed |
-| Real HTTP stream | 3911.94 tok/s | 960 ok, 0 failed |
+| Real HTTP stream | 4644.13 tok/s | 960 ok, 0 failed |
 
 Compared with the starting points listed in the performance design notes:
 
 - Internal Python backend: 2874.95 tok/s -> 5084.47 tok/s, +76.85%.
 - Real HTTP non-stream: 2344 tok/s -> 4945.54 tok/s, +110.99%.
-- Real HTTP stream CUDA baseline: 2324.10 tok/s -> 3911.94 tok/s, +68.32%.
+- Real HTTP stream CUDA baseline: 2324.10 tok/s -> 4644.13 tok/s, +99.82%.
 - C++ HTTP reference: 6083.75 tok/s, so the optimized Python HTTP non-stream path is about 81.3% of that reference.
+- C++ HTTP reference: 6083.75 tok/s, so the optimized Python HTTP stream path is about 76.3% of that reference.
 - C++ native reference: 8168.33 tok/s, so the optimized Python internal path is about 62.2% of that reference.
 
 Canonical real HTTP commands:
@@ -375,13 +378,13 @@ async def should_abort_after_token(token_index: int):
 
 The default interval is 64 tokens and can be overridden with `ALBATROSS_DISCONNECT_CHECK_INTERVAL`. Check disconnect only at those intervals and in `finally`.
 
-- [ ] **Step 3: Write tests for pre-encoded streaming chunks**
+- [x] **Step 3: Write tests for pre-encoded streaming chunks**
 
 Verify streaming output is still JSON-compatible and final `[DONE]` is present.
 
-- [ ] **Step 4: Implement compact JSON serialization**
+- [x] **Step 4: Implement compact JSON serialization**
 
-Use `json.dumps(payload, separators=(",", ":"))` in the Albatross streaming path to reduce payload size and CPU work. Keep non-streaming response dictionaries unchanged for compatibility.
+Use `json.dumps(payload, separators=(",", ":"))` in the Albatross streaming path to reduce payload size and CPU work. Keep non-streaming response dictionaries unchanged for compatibility. For Albatross stream responses, pre-frame the compact chunks as SSE bytes and serve them with `StreamingResponse`.
 
 - [ ] **Step 5: Run contract tests**
 

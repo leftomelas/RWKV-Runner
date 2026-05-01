@@ -10,6 +10,7 @@ import time, re, random, string
 
 from fastapi import APIRouter, Request, status, HTTPException
 from fastapi.encoders import jsonable_encoder
+from fastapi.responses import StreamingResponse
 from sse_starlette.sse import EventSourceResponse
 from pydantic import BaseModel, Field
 import tiktoken
@@ -140,6 +141,21 @@ ALBATROSS_DISCONNECT_CHECK_INTERVAL = get_albatross_disconnect_check_interval()
 
 def dumps_stream_chunk(payload: dict) -> str:
     return json.dumps(payload, separators=(",", ":"))
+
+
+def encode_sse_data(data: str) -> bytes:
+    return f"data: {data}\r\n\r\n".encode("utf-8")
+
+
+def albatross_streaming_response(response):
+    return StreamingResponse(
+        response,
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 class AlbatrossProfileAccumulator:
@@ -433,6 +449,28 @@ async def eval_albatross(
                 "total_tokens": prompt_tokens + completion_tokens,
             },
         }
+
+
+async def eval_albatross_sse(
+    model: AlbatrossRWKV,
+    request: Request,
+    body: ModelConfigBody,
+    prompt: str,
+    stop: Union[str, List[str], None],
+    stop_token_ids: Union[List[int], None],
+    chat_mode: bool,
+):
+    async for chunk in eval_albatross(
+        model,
+        request,
+        body,
+        prompt,
+        True,
+        stop,
+        stop_token_ids,
+        chat_mode,
+    ):
+        yield encode_sse_data(chunk)
 
 
 async def eval(
@@ -1169,6 +1207,18 @@ async def chat(
     completion_text: str,
 ):
     if body.stream:
+        if isinstance(model, AlbatrossRWKV):
+            return albatross_streaming_response(
+                eval_albatross_sse(
+                    model,
+                    request,
+                    body,
+                    completion_text,
+                    body.stop,
+                    body.stop_token_ids,
+                    True,
+                )
+            )
         return EventSourceResponse(
             eval(
                 model,
@@ -1212,6 +1262,18 @@ async def completions(body: CompletionBody, request: Request):
         body.prompt = body.prompt[0]  # TODO: support multiple prompts
 
     if body.stream:
+        if isinstance(model, AlbatrossRWKV):
+            return albatross_streaming_response(
+                eval_albatross_sse(
+                    model,
+                    request,
+                    body,
+                    body.prompt,
+                    body.stop,
+                    body.stop_token_ids,
+                    False,
+                )
+            )
         return EventSourceResponse(
             eval(
                 model,

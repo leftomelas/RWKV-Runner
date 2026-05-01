@@ -133,6 +133,22 @@ class AlbatrossCompletionContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(final["choices"][0]["finish_reason"], "stop")
         self.assertEqual(chunks[-1], "[DONE]")
 
+    async def test_eval_albatross_sse_response_frames_stream_chunks(self):
+        body = completion.ChatCompletionBody(messages=[])
+        model = FakeAlbatross()
+
+        chunks = []
+        async for chunk in completion.eval_albatross_sse(
+            model, FakeRequest(), body, "prompt", None, None, True
+        ):
+            chunks.append(chunk)
+
+        self.assertTrue(chunks[0].startswith(b"data: "))
+        self.assertTrue(chunks[0].endswith(b"\r\n\r\n"))
+        first = json.loads(chunks[0][6:-4])
+        self.assertEqual(first["choices"][0]["delta"]["content"], "Hello")
+        self.assertEqual(chunks[-1], b"data: [DONE]\r\n\r\n")
+
     async def test_eval_albatross_prefers_async_generation_path(self):
         body = completion.ChatCompletionBody(messages=[])
         model = FakeAsyncAlbatross()
