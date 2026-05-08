@@ -2,6 +2,7 @@ import asyncio
 import json
 import unittest
 
+import global_var
 from routes import completion
 
 
@@ -35,9 +36,8 @@ class FakeAlbatrossCompletion:
 
 
 class FakeAlbatross:
-    name = "albatross"
-
-    def __init__(self, events=None):
+    def __init__(self, events=None, name="RWKV7-G1-1.5B-ctx4k"):
+        self.name = name
         self.completion = FakeAlbatrossCompletion(
             events
             or [
@@ -52,9 +52,8 @@ class FakeAlbatross:
 
 
 class FakeAsyncAlbatross:
-    name = "albatross"
-
-    def __init__(self):
+    def __init__(self, name="RWKV7-G1-1.5B-ctx4k"):
+        self.name = name
         self.async_generate_args = None
 
     def generate(self, body, prompt, stop=None, stop_token_ids=None):
@@ -67,8 +66,12 @@ class FakeAsyncAlbatross:
 
 
 class AlbatrossCompletionContractTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        global_var.init()
+
     async def asyncTearDown(self):
         completion.ALBATROSS_DISCONNECT_CHECK_INTERVAL = 64
+        global_var.set(global_var.Model, None)
 
     def test_albatross_disconnect_polling_default_is_less_aggressive(self):
         self.assertEqual(completion.ALBATROSS_DISCONNECT_CHECK_INTERVAL, 64)
@@ -109,7 +112,7 @@ class AlbatrossCompletionContractTests(unittest.IsolatedAsyncioTestCase):
         ).__anext__()
 
         self.assertEqual(result["object"], "chat.completion")
-        self.assertEqual(result["model"], "albatross")
+        self.assertEqual(result["model"], "RWKV7-G1-1.5B-ctx4k")
         self.assertEqual(result["choices"][0]["message"]["content"], "Hello world")
         self.assertEqual(result["usage"]["prompt_tokens"], 3)
         self.assertEqual(result["usage"]["completion_tokens"], 2)
@@ -128,8 +131,33 @@ class AlbatrossCompletionContractTests(unittest.IsolatedAsyncioTestCase):
         first = json.loads(chunks[0])
         second = json.loads(chunks[1])
         final = json.loads(chunks[2])
+        self.assertEqual(first["model"], "RWKV7-G1-1.5B-ctx4k")
+        self.assertEqual(second["model"], "RWKV7-G1-1.5B-ctx4k")
+        self.assertEqual(final["model"], "RWKV7-G1-1.5B-ctx4k")
         self.assertEqual(first["choices"][0]["delta"]["content"], "Hello")
         self.assertEqual(second["choices"][0]["delta"]["content"], " world")
+        self.assertEqual(final["choices"][0]["finish_reason"], "stop")
+        self.assertEqual(chunks[-1], "[DONE]")
+
+    async def test_eval_albatross_streaming_text_completion_response(self):
+        body = completion.CompletionBody(prompt="prompt")
+        model = FakeAlbatross()
+
+        chunks = []
+        async for chunk in completion.eval_albatross(
+            model, FakeRequest(), body, "prompt", True, None, None, False
+        ):
+            chunks.append(chunk)
+
+        first = json.loads(chunks[0])
+        second = json.loads(chunks[1])
+        final = json.loads(chunks[2])
+        self.assertEqual(first["object"], "text_completion")
+        self.assertEqual(first["model"], "RWKV7-G1-1.5B-ctx4k")
+        self.assertEqual(second["model"], "RWKV7-G1-1.5B-ctx4k")
+        self.assertEqual(final["model"], "RWKV7-G1-1.5B-ctx4k")
+        self.assertEqual(first["choices"][0]["text"], "Hello")
+        self.assertEqual(second["choices"][0]["text"], " world")
         self.assertEqual(final["choices"][0]["finish_reason"], "stop")
         self.assertEqual(chunks[-1], "[DONE]")
 
@@ -146,6 +174,7 @@ class AlbatrossCompletionContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(chunks[0].startswith(b"data: "))
         self.assertTrue(chunks[0].endswith(b"\r\n\r\n"))
         first = json.loads(chunks[0][6:-4])
+        self.assertEqual(first["model"], "RWKV7-G1-1.5B-ctx4k")
         self.assertEqual(first["choices"][0]["delta"]["content"], "Hello")
         self.assertEqual(chunks[-1], b"data: [DONE]\r\n\r\n")
 
@@ -218,6 +247,23 @@ class AlbatrossCompletionContractTests(unittest.IsolatedAsyncioTestCase):
                 completion.AlbatrossRWKV = original_albatross_cls
 
         self.assertEqual(result["object"], "text_completion")
+        self.assertEqual(result["model"], "RWKV7-G1-1.5B-ctx4k")
+        self.assertEqual(result["choices"][0]["text"], "Hello world")
+
+    async def test_completions_returns_albatross_model_name(self):
+        body = completion.CompletionBody(prompt="prompt")
+        model = FakeAlbatross()
+        original_albatross_cls = getattr(completion, "AlbatrossRWKV", None)
+        completion.AlbatrossRWKV = FakeAlbatross
+        global_var.set(global_var.Model, model)
+        try:
+            result = await completion.completions(body, FakeRequest())
+        finally:
+            if original_albatross_cls is not None:
+                completion.AlbatrossRWKV = original_albatross_cls
+
+        self.assertEqual(result["object"], "text_completion")
+        self.assertEqual(result["model"], "RWKV7-G1-1.5B-ctx4k")
         self.assertEqual(result["choices"][0]["text"], "Hello world")
 
 

@@ -1,10 +1,11 @@
 import asyncio
+import os
 import pathlib
 import queue
 import threading
 from typing import Dict, List, Optional, Tuple, Union
 
-from utils.rwkv import AbstractRWKV, ModelConfigBody, RWKVType
+from utils.rwkv import AbstractRWKV, ModelConfigBody, RWKVType, get_model_path
 
 
 class AlbatrossCompletion:
@@ -37,8 +38,8 @@ class AlbatrossRWKV(AbstractRWKV):
         tokenizer: Optional[str] = None,
     ):
         self.EOS_ID = 0
-        self.name = "albatross"
-        self.model_path = model_path
+        self.model_path = get_model_path(model_path)
+        self.name, _ = os.path.splitext(os.path.basename(self.model_path))
         self.version = 7
         self.model = None
         self.pipeline = None

@@ -5,6 +5,12 @@ from albatross_engine.adapter import AlbatrossRWKV
 
 
 class AlbatrossUnsupportedTests(unittest.TestCase):
+    def test_albatross_model_name_matches_model_filename(self):
+        with patch.object(AlbatrossRWKV, "_init_engine", lambda self: None):
+            model = AlbatrossRWKV("models/RWKV7-G1-1.5B-ctx4k.pth")
+
+        self.assertEqual(model.name, "RWKV7-G1-1.5B-ctx4k")
+
     def test_albatross_embedding_is_explicitly_unsupported(self):
         with patch.object(AlbatrossRWKV, "_init_engine", lambda self: None):
             model = AlbatrossRWKV("models/example-rwkv7.pth")
