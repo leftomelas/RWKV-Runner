@@ -2,8 +2,8 @@ package backend_golang
 
 import (
 	"bufio"
-	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -117,6 +117,7 @@ func TestBatchCompletionStopCancelsActiveRun(t *testing.T) {
 	started := make(chan struct{}, 1)
 	canceled := make(chan struct{}, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
 		started <- struct{}{}
 		select {
 		case <-r.Context().Done():
@@ -182,5 +183,3 @@ func TestDecodeSSEForTestHelper(t *testing.T) {
 		t.Fatalf("unexpected deltas: %#v", deltas)
 	}
 }
-
-var _ = context.Background

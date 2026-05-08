@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -33,6 +34,10 @@ type App struct {
 	proxyPort     int
 	exDir         string
 	cmdPrefix     string
+
+	batchCompletionMu   sync.Mutex
+	batchCompletionRuns map[string]*batchCompletionRun
+	batchCompletionEmit batchCompletionEmitFunc
 }
 
 // NewApp creates a new App application struct
@@ -142,6 +147,7 @@ func (a *App) OnStartup(ctx context.Context) {
 }
 
 func (a *App) OnBeforeClose(ctx context.Context) bool {
+	a.stopAllBatchCompletions()
 	if monitor != nil {
 		monitor.Process.Kill()
 	}
