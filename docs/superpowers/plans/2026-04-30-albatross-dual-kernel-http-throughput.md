@@ -1,10 +1,12 @@
-# Albatross Dual Kernel and HTTP Throughput Implementation Plan
+# Albatross sm80 Kernel and HTTP Throughput Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Let Albatross keep both native `sm120` and compatible `sm80,compute80` precompiled kernels, then measure and reduce HTTP streaming overhead under high concurrency.
+**Goal:** Ship the compatible `sm80,compute80` precompiled kernel as the final P0 Albatross artifact, then measure and reduce HTTP streaming overhead under high concurrency. A native `sm120` artifact was built and benchmarked during the work, but it is not retained in the final branch because it was slower than `sm80_compute80` on the measured workload.
 
 **Architecture:** Kernel artifacts are selected from manifest entries by runtime context, exact architecture preference, and optional environment override. HTTP optimization is evidence-led: add route/benchmark diagnostics first, then reduce per-token work in the Albatross streaming path while preserving OpenAI-compatible responses.
+
+**Final artifact decision:** `backend-python/albatross/kernels/manifest.json` should contain only the `sm80_compute80` precompiled `.pyd`. The `sm120` results below are kept as historical benchmark evidence, not as an instruction to keep or ship an `sm120` artifact.
 
 **Tech Stack:** Python 3.10, PyTorch CUDA extension loader, FastAPI, `sse-starlette`, asyncio, unittest, local PowerShell benchmark scripts.
 
@@ -57,7 +59,7 @@ Reducing Albatross stream disconnect polling from every 8 tokens to every 64 tok
 
 Switching the Albatross stream path from `EventSourceResponse` to direct pre-framed SSE bytes through `StreamingResponse` improved real HTTP stream again from 3911.94 tok/s to 4644.13 tok/s, with 960 ok and 0 failed. This keeps one SSE event per generated token, but removes the framework's per-event SSE serialization path. In the same run, `yield_resume_ms` dropped from roughly 53.60M ms to 10.13K ms; the dominant route time moved to waiting for model completions.
 
-Current 300-token CUDA sampler baseline after the P0/P1 changes:
+Current 300-token CUDA sampler baseline after the P0/P1 changes. The final branch keeps only the `sm80_compute80` artifact; `sm120` is shown only because it was measured before that final artifact decision.
 
 | Path | sm80_compute80 | sm120 | Notes |
 | --- | ---: | ---: | --- |
@@ -74,7 +76,7 @@ Compared with the starting points listed in the performance design notes:
 - C++ HTTP reference: 6083.75 tok/s, so the optimized Python HTTP stream path is about 76.3% of that reference.
 - C++ native reference: 8168.33 tok/s, so the optimized Python internal path is about 62.2% of that reference.
 
-Measured sm120 on the same benchmark shape after the HTTP stream optimizations. It loaded successfully and exposed the fused sampler ops, but was slower than sm80_compute80 in this setup: internal -4.31%, real HTTP non-stream -3.28%, and real HTTP stream -2.92%. The loader now treats `sm80_compute80` as the default preferred kernel when it is compatible and present; `ALBATROSS_KERNEL_ARCH=sm120` still forces the native sm120 artifact for comparison runs.
+Measured sm120 on the same benchmark shape after the HTTP stream optimizations. It loaded successfully and exposed the fused sampler ops, but was slower than sm80_compute80 in this setup: internal -4.31%, real HTTP non-stream -3.28%, and real HTTP stream -2.92%. The final P0 branch therefore keeps `sm80_compute80` as the only committed precompiled artifact. `ALBATROSS_KERNEL_ARCH=sm120` is useful only for local comparison runs after building a local sm120 artifact; it is not expected to resolve against the committed manifest.
 
 Active state layout has only received the conservative `organize_batch` cleanup so far: avoiding list membership scans and sorted dict iteration while keeping the existing slot/state swap model. A full active-layout rewrite has not been implemented. Current profiles still show measurable `state_slot_scan`, `organize_batch`, and `state_swap` cost, but the larger remaining gap is tied to the forward kernel/state layout and sampling path. Treat full active state layout work as a larger design item, preferably evaluated together with the future `faster2_251201` reference rather than as an isolated Python-side reshuffle.
 
@@ -214,14 +216,14 @@ Run:
 
 Expected: all loader tests pass.
 
-### Task 2: Build Script Produces Coexisting Artifact Paths
+### Task 2: Build Script Produces Arch-Specific Artifact Paths
 
 **Files:**
 - Modify: `backend-python/scripts/build_albatross_kernel.py`
 - Modify: `backend-python/tests/test_albatross_build_script.py`
 - Modify: `backend-python/albatross/kernels/manifest.json`
-- Add: `backend-python/albatross/kernels/torch-2.7.1+cu128/win_amd64/cp310/sm120/rwkv7_state_fwd_fp16.pyd`
-- Add later after local build: `backend-python/albatross/kernels/torch-2.7.1+cu128/win_amd64/cp310/sm80_compute80/rwkv7_state_fwd_fp16.pyd`
+- Add final artifact: `backend-python/albatross/kernels/torch-2.7.1+cu128/win_amd64/cp310/sm80_compute80/rwkv7_state_fwd_fp16.pyd`
+- Do not retain final artifact: `backend-python/albatross/kernels/torch-2.7.1+cu128/win_amd64/cp310/sm120/rwkv7_state_fwd_fp16.pyd`
 - Delete after migration: `backend-python/albatross/kernels/torch-2.7.1+cu128/win_amd64/cp310/rwkv7_state_fwd_fp16.pyd`
 
 - [x] **Step 1: Write failing tests for artifact arch directory and manifest replacement scope**
@@ -285,7 +287,7 @@ relative_library = (
 
 Change `update_manifest.same_context()` keys to include `"arch"`.
 
-- [x] **Step 4: Move committed sm120 artifact into the new path**
+- [x] **Step 4: Move temporary sm120 artifact into an arch-specific path for measurement**
 
 Use PowerShell move/copy commands only after verifying paths:
 
@@ -294,7 +296,7 @@ New-Item -ItemType Directory -Force backend-python\albatross\kernels\torch-2.7.1
 Move-Item backend-python\albatross\kernels\torch-2.7.1+cu128\win_amd64\cp310\rwkv7_state_fwd_fp16.pyd backend-python\albatross\kernels\torch-2.7.1+cu128\win_amd64\cp310\sm120\rwkv7_state_fwd_fp16.pyd
 ```
 
-Update `manifest.json` to point at the `sm120/` path.
+Update `manifest.json` to point at the `sm120/` path during the temporary comparison phase. This step was superseded after benchmarks showed `sm80_compute80` was faster; the final branch removes the sm120 manifest entry and `.pyd`.
 
 - [x] **Step 5: Build and register sm80_compute80**
 
@@ -305,7 +307,7 @@ $env:ALBATROSS_ARCH='sm80,compute80'
 cmd /c backend-python\scripts\build_albatross_kernel_vs2022.cmd
 ```
 
-Expected: build succeeds and creates the `sm80_compute80/` artifact without overwriting `sm120/`.
+Expected: build succeeds and creates the `sm80_compute80/` artifact. The final branch keeps this artifact and removes the slower sm120 artifact.
 
 - [x] **Step 6: Run build and loader tests**
 
@@ -351,7 +353,7 @@ Create `backend-python/bench/albatross_internal_benchmark.py` with CLI args:
 
 It should initialize `AsyncEngineCore`, create `concurrency` completions, consume them concurrently, and print total tokens, wall time, aggregate tokens/s, first token p50/p95, and request wall p50/p95.
 
-- [ ] **Step 3: Run diagnostics on sm120**
+- [x] **Step 3: Run diagnostics on sm120**
 
 Run:
 
@@ -359,7 +361,7 @@ Run:
 .\py310\python.exe backend-python\bench\albatross_internal_benchmark.py --model D:\RWKV_Runner\models\RWKV7-G1-1.5B-16%25trained-20250308-ctx4k.pth --batch 960 --concurrency 960 --max-tokens 300 --no-stop
 ```
 
-Then run API streaming and non-streaming benchmarks with the same `max_tokens`. Compare token counts before optimizing HTTP.
+Then run API streaming and non-streaming benchmarks with the same `max_tokens`. Compare token counts before optimizing HTTP. This diagnostic was completed; sm120 remained slower than `sm80_compute80`, so sm120 was not retained.
 
 ### Task 4: Optimize Albatross HTTP Streaming Path
 
@@ -439,7 +441,7 @@ Switch model with `manual_albatross_smoke.py`, then run:
 .\py310\python.exe backend-python\bench\albatross_api_benchmark.py --port 8001 --concurrency 960 --requests 960 --max-tokens 300 --timeout 900
 ```
 
-Expected: `960 ok, 0 failed`. Compare aggregate tokens/s with the earlier `1604.65 tok/s` sm120 API result and report whether the bottleneck moved.
+Expected: `960 ok, 0 failed`. Compare aggregate tokens/s with the earlier `1604.65 tok/s` sm120 API result and report whether the bottleneck moved. Result: sm120 improved after the HTTP work but still trailed `sm80_compute80`, so the final branch removed the sm120 committed artifact.
 
 - [ ] **Step 4: Check git status**
 

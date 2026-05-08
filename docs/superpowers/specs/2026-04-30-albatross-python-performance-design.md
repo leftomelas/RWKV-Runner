@@ -249,7 +249,7 @@ Roll out in this order:
 
 1. Merge profiling with no behavior change.
 2. Add fused CUDA sampler behind `ALBATROSS_SAMPLER=cuda`.
-3. Precompile sampler-capable sm80 and sm120 kernels.
+3. Precompile and ship the sampler-capable `sm80_compute80` kernel as the default Albatross artifact. The native `sm120` artifact was evaluated separately but is not retained in the final P0 branch because it measured slower on the target benchmark shape.
 4. Change default sampler only after validation.
 5. Add CUDA Graph behind `ALBATROSS_CUDA_GRAPH=1`.
 6. Keep graph disabled by default until memory usage and fallback behavior are stable.
