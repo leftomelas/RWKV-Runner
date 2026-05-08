@@ -576,44 +576,45 @@ const Configs: FC = observer(() => {
                           }}
                         />
                       </div>
-                      {!usingGGUF &&
-                      !selectedConfig.modelParameters.device.startsWith(
-                        'WebGPU'
-                      ) ? (
-                        selectedConfig.modelParameters.device !==
-                        'CPU (rwkv.cpp)' ? (
-                          <ToolTipButton
-                            text={t('Convert')}
-                            className="shrink-0"
-                            desc={t(
-                              'Convert model with these configs. Using a converted model will greatly improve the loading speed, but model parameters of the converted model cannot be modified.'
-                            )}
-                            onClick={() =>
-                              convertModel(selectedConfig, navigate)
-                            }
-                          />
+                      {!usingAlbatross &&
+                        (!usingGGUF &&
+                        !selectedConfig.modelParameters.device.startsWith(
+                          'WebGPU'
+                        ) ? (
+                          selectedConfig.modelParameters.device !==
+                          'CPU (rwkv.cpp)' ? (
+                            <ToolTipButton
+                              text={t('Convert')}
+                              className="shrink-0"
+                              desc={t(
+                                'Convert model with these configs. Using a converted model will greatly improve the loading speed, but model parameters of the converted model cannot be modified.'
+                              )}
+                              onClick={() =>
+                                convertModel(selectedConfig, navigate)
+                              }
+                            />
+                          ) : (
+                            <ToolTipButton
+                              text={t('Convert To GGML Format')}
+                              className="shrink-0"
+                              desc=""
+                              onClick={() =>
+                                convertToGGML(selectedConfig, navigate)
+                              }
+                            />
+                          )
                         ) : (
-                          <ToolTipButton
-                            text={t('Convert To GGML Format')}
-                            className="shrink-0"
-                            desc=""
-                            onClick={() =>
-                              convertToGGML(selectedConfig, navigate)
-                            }
-                          />
-                        )
-                      ) : (
-                        !usingGGUF && (
-                          <ToolTipButton
-                            text={t('Convert To Safe Tensors Format')}
-                            className="shrink-0"
-                            desc=""
-                            onClick={() =>
-                              convertToSt(selectedConfig, navigate)
-                            }
-                          />
-                        )
-                      )}
+                          !usingGGUF && (
+                            <ToolTipButton
+                              text={t('Convert To Safe Tensors Format')}
+                              className="shrink-0"
+                              desc=""
+                              onClick={() =>
+                                convertToSt(selectedConfig, navigate)
+                              }
+                            />
+                          )
+                        ))}
                     </div>
                   </div>
                   <Labeled
@@ -667,9 +668,11 @@ const Configs: FC = observer(() => {
                         </Option>
                         {/*{commonStore.platform === 'darwin' && <Option value="MPS">MPS</Option>}*/}
                         <Option value="CUDA">CUDA</Option>
-                        <Option value="CUDA High Performance">
-                          CUDA High Performance (RWKV-7 .pth only)
-                        </Option>
+                        {commonStore.platform === 'windows' && (
+                          <Option value="CUDA High Performance">
+                            {t('CUDA High Performance (RWKV-7 .pth only)')!}
+                          </Option>
+                        )}
                         {/*<Option value="CUDA-Beta">{t('CUDA (Beta, Faster)')!}</Option>*/}
                         {/* <Option value="WebGPU">WebGPU</Option> */}
                         <Option value="WebGPU (Python)">WebGPU (Python)</Option>
@@ -745,6 +748,20 @@ const Configs: FC = observer(() => {
                       }
                     />
                   )}
+                  {!usingGGUF &&
+                    selectedConfig.modelParameters.device.startsWith('CUDA') &&
+                    !usingAlbatross && (
+                      <Labeled
+                        label={t('Current Strategy')}
+                        content={<Text> {getStrategy(selectedConfig)} </Text>}
+                      />
+                    )}
+                  {!usingGGUF && usingAlbatross && (
+                    <Labeled
+                      label={t('Current Strategy')}
+                      content={<Text> {getStrategy(selectedConfig)} </Text>}
+                    />
+                  )}
                   {!usingGGUF && usingAlbatross && (
                     <Labeled
                       label={t('Albatross Batch')}
@@ -768,20 +785,6 @@ const Configs: FC = observer(() => {
                           }}
                         />
                       }
-                    />
-                  )}
-                  {!usingGGUF &&
-                    selectedConfig.modelParameters.device.startsWith('CUDA') &&
-                    !usingAlbatross && (
-                      <Labeled
-                        label={t('Current Strategy')}
-                        content={<Text> {getStrategy(selectedConfig)} </Text>}
-                      />
-                    )}
-                  {!usingGGUF && usingAlbatross && (
-                    <Labeled
-                      label={t('Current Strategy')}
-                      content={<Text> {getStrategy(selectedConfig)} </Text>}
                     />
                   )}
                   {!usingGGUF &&
@@ -923,6 +926,7 @@ const Configs: FC = observer(() => {
                       <div />
                     )}
                   {!usingGGUF &&
+                    !usingAlbatross &&
                     (selectedConfig.modelParameters.device.startsWith('CUDA') ||
                       selectedConfig.modelParameters.device === 'Custom') && (
                       <Labeled
@@ -948,6 +952,7 @@ const Configs: FC = observer(() => {
                       />
                     )}
                   {!usingGGUF &&
+                    !usingAlbatross &&
                     selectedConfig.modelParameters.device !== 'WebGPU' && (
                       <Accordion
                         className="sm:col-span-2"
