@@ -2,7 +2,9 @@ package backend_golang
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +12,12 @@ import (
 	"testing"
 	"time"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
 
 func TestBatchCompletionRequestValidation(t *testing.T) {
 	app := NewApp()
@@ -152,6 +160,73 @@ func TestBatchCompletionStopCancelsActiveRun(t *testing.T) {
 	}
 	if err := app.StopBatchCompletions(batchID); err == nil {
 		t.Fatal("expected unknown batch error after first stop")
+	}
+}
+
+func TestBatchCompletionRetriesConnectionRefused(t *testing.T) {
+	originalClient := batchCompletionHTTPClient
+	originalRetryDelays := batchCompletionRetryDelays
+	defer func() {
+		batchCompletionHTTPClient = originalClient
+		batchCompletionRetryDelays = originalRetryDelays
+	}()
+
+	attempts := 0
+	batchCompletionRetryDelays = []time.Duration{time.Millisecond}
+	batchCompletionHTTPClient = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			attempts++
+			if attempts == 1 {
+				return nil, errors.New("dial tcp 127.0.0.1:8000: connectex: No connection could be made because the target machine actively refused it")
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body: io.NopCloser(bytes.NewBufferString(
+					"data: {\"choices\":[{\"text\":\"ok\"}]}\n\n" +
+						"data: [DONE]\n\n",
+				)),
+			}, nil
+		}),
+	}
+
+	updateEvents := make(chan BatchCompletionUpdateEvent, 8)
+	app := NewApp()
+	app.batchCompletionEmit = func(event string, data any) {
+		if event != batchCompletionUpdateEvent {
+			return
+		}
+		payload, ok := data.(BatchCompletionUpdateEvent)
+		if ok {
+			updateEvents <- payload
+		}
+	}
+
+	_, err := app.StartBatchCompletions(BatchCompletionRequest{
+		URL:   "http://127.0.0.1:8000/v1/completions",
+		Count: 1,
+		Body:  map[string]any{"prompt": "hello", "stream": true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var sawDone bool
+	deadline := time.After(2 * time.Second)
+	for !sawDone {
+		select {
+		case payload := <-updateEvents:
+			for _, update := range payload.Updates {
+				if update.Status == "done" && update.Text == "ok" {
+					sawDone = true
+				}
+			}
+		case <-deadline:
+			t.Fatal("expected retry to recover from connection refused")
+		}
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
 	}
 }
 

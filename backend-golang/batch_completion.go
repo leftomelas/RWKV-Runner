@@ -54,7 +54,28 @@ type batchCompletionRun struct {
 
 type batchCompletionEmitFunc func(event string, data any)
 
-var batchCompletionHTTPClient = &http.Client{Timeout: 0}
+var batchCompletionHTTPClient = &http.Client{
+	Timeout: 0,
+	Transport: &http.Transport{
+		Proxy:               http.ProxyFromEnvironment,
+		MaxIdleConns:        1200,
+		MaxIdleConnsPerHost: 1200,
+		IdleConnTimeout:     90 * time.Second,
+	},
+}
+
+var batchCompletionRetryDelays = []time.Duration{
+	50 * time.Millisecond,
+	100 * time.Millisecond,
+	200 * time.Millisecond,
+	400 * time.Millisecond,
+	800 * time.Millisecond,
+	1200 * time.Millisecond,
+	1800 * time.Millisecond,
+	2500 * time.Millisecond,
+	3500 * time.Millisecond,
+	5000 * time.Millisecond,
+}
 
 func (a *App) StartBatchCompletions(req BatchCompletionRequest) (string, error) {
 	if err := req.validate(); err != nil {
@@ -169,17 +190,7 @@ func (a *App) runBatchCompletionItem(ctx context.Context, req BatchCompletionReq
 		return
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, req.URL, bytes.NewReader(encodedBody))
-	if err != nil {
-		sendBatchCompletionUpdate(ctx, updates, BatchCompletionUpdate{ItemID: itemID, Status: "error", Error: err.Error()})
-		return
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	for key, value := range req.Headers {
-		httpReq.Header.Set(key, value)
-	}
-
-	res, err := batchCompletionHTTPClient.Do(httpReq)
+	res, err := doBatchCompletionRequest(ctx, req, itemID, encodedBody)
 	if err != nil {
 		if ctx.Err() != nil {
 			sendBatchCompletionUpdate(ctx, updates, BatchCompletionUpdate{ItemID: itemID, Status: "aborted"})
@@ -239,6 +250,73 @@ func (a *App) runBatchCompletionItem(ctx context.Context, req BatchCompletionReq
 	}
 
 	sendBatchCompletionUpdate(ctx, updates, BatchCompletionUpdate{ItemID: itemID, Status: "done", Text: text.String()})
+}
+
+func doBatchCompletionRequest(ctx context.Context, req BatchCompletionRequest, itemID int, encodedBody []byte) (*http.Response, error) {
+	var lastErr error
+	for attempt := 0; attempt <= len(batchCompletionRetryDelays); attempt++ {
+		if attempt == 0 {
+			if err := waitBatchCompletionRetryDelay(ctx, initialBatchCompletionConnectDelay(itemID)); err != nil {
+				return nil, err
+			}
+		}
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, req.URL, bytes.NewReader(encodedBody))
+		if err != nil {
+			return nil, err
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		for key, value := range req.Headers {
+			httpReq.Header.Set(key, value)
+		}
+
+		res, err := batchCompletionHTTPClient.Do(httpReq)
+		if err == nil {
+			return res, nil
+		}
+		lastErr = err
+		if ctx.Err() != nil || !isRetriableBatchCompletionDialError(err) || attempt == len(batchCompletionRetryDelays) {
+			return nil, err
+		}
+
+		delay := batchCompletionRetryDelays[attempt] + batchCompletionRetryJitter(itemID, attempt)
+		if err := waitBatchCompletionRetryDelay(ctx, delay); err != nil {
+			return nil, err
+		}
+	}
+	return nil, lastErr
+}
+
+func initialBatchCompletionConnectDelay(itemID int) time.Duration {
+	return time.Duration(itemID%128) * 4 * time.Millisecond
+}
+
+func batchCompletionRetryJitter(itemID int, attempt int) time.Duration {
+	return time.Duration((itemID*17+attempt*31)%97) * 11 * time.Millisecond
+}
+
+func waitBatchCompletionRetryDelay(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		timer.Stop()
+		return ctx.Err()
+	}
+}
+
+func isRetriableBatchCompletionDialError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "connection refused") ||
+		strings.Contains(message, "actively refused") ||
+		strings.Contains(message, "connection reset by peer") ||
+		strings.Contains(message, "forcibly closed")
 }
 
 func sendBatchCompletionUpdate(ctx context.Context, updates chan<- BatchCompletionUpdate, update BatchCompletionUpdate) bool {
