@@ -58,7 +58,7 @@ class AbstractLlama(ABC):
                     stream=True,
                     stop=stop,
                     frequency_penalty=self.penalty_alpha_frequency,
-                    presence_penalty=self.penalty_alpha_presence,
+                    present_penalty=self.penalty_alpha_presence,
                 )
             )
 
@@ -89,7 +89,7 @@ class AbstractLlama(ABC):
                     stream=True,
                     stop=stop,
                     frequency_penalty=self.penalty_alpha_frequency,
-                    presence_penalty=self.penalty_alpha_presence,
+                    present_penalty=self.penalty_alpha_presence,
                 )
             )
 
