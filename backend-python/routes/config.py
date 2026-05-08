@@ -6,8 +6,6 @@ from pydantic import BaseModel
 from utils.rwkv import *
 from utils.llama import *
 from utils.torch import *
-from albatross_engine.adapter import AlbatrossRWKV
-from albatross_engine.config import is_albatross_strategy, parse_albatross_strategy
 import global_var
 
 router = APIRouter()
@@ -81,24 +79,34 @@ def switch_model(body: SwitchModelBody, response: Response, request: Request):
                 global_var.Model,
                 Llama(model_path=body.model, strategy=body.strategy),
             )
-        elif is_albatross_strategy(body.strategy):
-            albatross_config = parse_albatross_strategy(body.strategy)
-            global_var.set(
-                global_var.Model,
-                AlbatrossRWKV(
-                    model_path=body.model,
-                    worker_num=albatross_config.worker_num,
-                    batch_size=albatross_config.batch_size,
-                    tokenizer=body.tokenizer,
-                ),
-            )
         else:
-            global_var.set(
-                global_var.Model,
-                RWKV(
-                    model=body.model, strategy=body.strategy, tokenizer=body.tokenizer
-                ),
+            from albatross_engine.config import (
+                is_albatross_strategy,
+                parse_albatross_strategy,
             )
+
+            if is_albatross_strategy(body.strategy):
+                from albatross_engine.adapter import AlbatrossRWKV
+
+                albatross_config = parse_albatross_strategy(body.strategy)
+                global_var.set(
+                    global_var.Model,
+                    AlbatrossRWKV(
+                        model_path=body.model,
+                        worker_num=albatross_config.worker_num,
+                        batch_size=albatross_config.batch_size,
+                        tokenizer=body.tokenizer,
+                    ),
+                )
+            else:
+                global_var.set(
+                    global_var.Model,
+                    RWKV(
+                        model=body.model,
+                        strategy=body.strategy,
+                        tokenizer=body.tokenizer,
+                    ),
+                )
     except Exception as e:
         print(e)
         import traceback

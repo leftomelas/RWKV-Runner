@@ -1,6 +1,7 @@
 import asyncio
 import json
 import unittest
+from unittest import mock
 
 import global_var
 from routes import completion
@@ -232,19 +233,18 @@ class AlbatrossCompletionContractTests(unittest.IsolatedAsyncioTestCase):
         body = completion.CompletionBody(prompt="prompt")
         model = FakeAlbatross()
         completion.completion_lock.acquire()
-        original_albatross_cls = getattr(completion, "AlbatrossRWKV", None)
-        completion.AlbatrossRWKV = FakeAlbatross
         try:
-            result = await asyncio.wait_for(
-                completion.eval(
-                    model, FakeRequest(), body, "prompt", False, None, None, False
-                ).__anext__(),
-                timeout=0.2,
-            )
+            with mock.patch.object(
+                completion, "is_albatross_model", return_value=True
+            ):
+                result = await asyncio.wait_for(
+                    completion.eval(
+                        model, FakeRequest(), body, "prompt", False, None, None, False
+                    ).__anext__(),
+                    timeout=0.2,
+                )
         finally:
             completion.completion_lock.release()
-            if original_albatross_cls is not None:
-                completion.AlbatrossRWKV = original_albatross_cls
 
         self.assertEqual(result["object"], "text_completion")
         self.assertEqual(result["model"], "RWKV7-G1-1.5B-ctx4k")
@@ -253,14 +253,11 @@ class AlbatrossCompletionContractTests(unittest.IsolatedAsyncioTestCase):
     async def test_completions_returns_albatross_model_name(self):
         body = completion.CompletionBody(prompt="prompt")
         model = FakeAlbatross()
-        original_albatross_cls = getattr(completion, "AlbatrossRWKV", None)
-        completion.AlbatrossRWKV = FakeAlbatross
         global_var.set(global_var.Model, model)
-        try:
+        with mock.patch.object(
+            completion, "is_albatross_model", return_value=True
+        ):
             result = await completion.completions(body, FakeRequest())
-        finally:
-            if original_albatross_cls is not None:
-                completion.AlbatrossRWKV = original_albatross_cls
 
         self.assertEqual(result["object"], "text_completion")
         self.assertEqual(result["model"], "RWKV7-G1-1.5B-ctx4k")

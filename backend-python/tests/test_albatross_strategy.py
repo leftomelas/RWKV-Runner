@@ -1,3 +1,5 @@
+import sys
+import types
 import unittest
 from unittest.mock import Mock, patch
 
@@ -48,18 +50,26 @@ class AlbatrossSwitchModelTests(unittest.TestCase):
         from utils.rwkv import ModelConfigBody
 
         fake_albatross = object()
+        fake_adapter = types.ModuleType("albatross_engine.adapter")
+        fake_adapter.AlbatrossRWKV = Mock(return_value=fake_albatross)
+        fake_config = types.ModuleType("albatross_engine.config")
+        fake_config.is_albatross_strategy = Mock(return_value=True)
+        fake_config.parse_albatross_strategy = Mock(
+            return_value=AlbatrossBackendConfig(worker_num=2, batch_size=64)
+        )
 
         with (
+            patch.dict(
+                sys.modules,
+                {
+                    "albatross_engine.adapter": fake_adapter,
+                    "albatross_engine.config": fake_config,
+                },
+            ),
             patch.object(config, "torch_gc"),
             patch.object(config.state_cache, "enable_state_cache"),
             patch.object(config, "RWKV") as rwkv_factory,
             patch.object(config, "Llama") as llama_factory,
-            patch.object(
-                config,
-                "AlbatrossRWKV",
-                Mock(return_value=fake_albatross),
-                create=True,
-            ) as albatross_factory,
             patch.object(config, "get_rwkv_config", return_value=ModelConfigBody()),
             patch.object(config, "get_llama_config", return_value=ModelConfigBody()),
         ):
@@ -75,7 +85,13 @@ class AlbatrossSwitchModelTests(unittest.TestCase):
             )
 
         self.assertEqual(result, "success")
-        albatross_factory.assert_called_once_with(
+        fake_config.is_albatross_strategy.assert_called_once_with(
+            "albatross workers=2 batch=64"
+        )
+        fake_config.parse_albatross_strategy.assert_called_once_with(
+            "albatross workers=2 batch=64"
+        )
+        fake_adapter.AlbatrossRWKV.assert_called_once_with(
             model_path="models/rwkv7-test.pth",
             worker_num=2,
             batch_size=64,
@@ -92,20 +108,20 @@ class AlbatrossSwitchModelTests(unittest.TestCase):
         from utils.rwkv import ModelConfigBody
 
         fake_llama = object()
+        fake_adapter = types.ModuleType("albatross_engine.adapter")
+        fake_adapter.AlbatrossRWKV = Mock()
 
         with (
+            patch.dict(
+                sys.modules,
+                {"albatross_engine.adapter": fake_adapter},
+            ),
             patch.object(config, "torch_gc"),
             patch.object(config.state_cache, "enable_state_cache"),
             patch.object(config, "RWKV") as rwkv_factory,
             patch.object(
                 config, "Llama", Mock(return_value=fake_llama)
             ) as llama_factory,
-            patch.object(
-                config,
-                "AlbatrossRWKV",
-                Mock(),
-                create=True,
-            ) as albatross_factory,
             patch.object(config, "get_rwkv_config", return_value=ModelConfigBody()),
             patch.object(config, "get_llama_config", return_value=ModelConfigBody()),
         ):
@@ -125,7 +141,7 @@ class AlbatrossSwitchModelTests(unittest.TestCase):
             model_path="models/rwkv7-test.gguf",
             strategy="albatross workers=2 batch=64",
         )
-        albatross_factory.assert_not_called()
+        fake_adapter.AlbatrossRWKV.assert_not_called()
         rwkv_factory.assert_not_called()
         self.assertIs(global_var.get(global_var.Model), fake_llama)
 

@@ -23,7 +23,6 @@ from routes.schema import (
 from utils.rwkv import *
 from utils.llama import *
 from utils.log import quick_log
-from albatross_engine.adapter import AlbatrossRWKV
 import global_var
 
 router = APIRouter()
@@ -236,6 +235,14 @@ def albatross_profile_enabled() -> bool:
     return os.environ.get("ALBATROSS_PROFILE") == "1"
 
 
+def is_albatross_model(model) -> bool:
+    if model is None:
+        return False
+    from albatross_engine.adapter import AlbatrossRWKV
+
+    return isinstance(model, AlbatrossRWKV)
+
+
 @router.get("/albatross/profile", tags=["Albatross"])
 def get_albatross_profile(reset: bool = False):
     return albatross_profile.snapshot(reset=reset)
@@ -248,7 +255,7 @@ def reset_albatross_profile():
 
 
 async def eval_albatross(
-    model: AlbatrossRWKV,
+    model,
     request: Request,
     body: ModelConfigBody,
     prompt: str,
@@ -452,7 +459,7 @@ async def eval_albatross(
 
 
 async def eval_albatross_sse(
-    model: AlbatrossRWKV,
+    model,
     request: Request,
     body: ModelConfigBody,
     prompt: str,
@@ -483,7 +490,7 @@ async def eval(
     stop_token_ids: Union[List[int], None],
     chat_mode: bool,
 ):
-    if isinstance(model, AlbatrossRWKV):
+    if is_albatross_model(model):
         async for result in eval_albatross(
             model,
             request,
@@ -1207,7 +1214,7 @@ async def chat(
     completion_text: str,
 ):
     if body.stream:
-        if isinstance(model, AlbatrossRWKV):
+        if is_albatross_model(model):
             return albatross_streaming_response(
                 eval_albatross_sse(
                     model,
@@ -1262,7 +1269,7 @@ async def completions(body: CompletionBody, request: Request):
         body.prompt = body.prompt[0]  # TODO: support multiple prompts
 
     if body.stream:
-        if isinstance(model, AlbatrossRWKV):
+        if is_albatross_model(model):
             return albatross_streaming_response(
                 eval_albatross_sse(
                     model,
