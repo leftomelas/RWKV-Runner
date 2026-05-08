@@ -202,6 +202,10 @@ export function SaveJson(arg1, arg2) {
   return window['go']['backend_golang']['App']['SaveJson'](arg1, arg2);
 }
 
+export function StartBatchCompletions(arg1) {
+  return window['go']['backend_golang']['App']['StartBatchCompletions'](arg1);
+}
+
 export function StartFile(arg1) {
   return window['go']['backend_golang']['App']['StartFile'](arg1);
 }
@@ -212,6 +216,10 @@ export function StartServer(arg1, arg2, arg3, arg4, arg5, arg6, arg7) {
 
 export function StartWebGPUServer(arg1, arg2) {
   return window['go']['backend_golang']['App']['StartWebGPUServer'](arg1, arg2);
+}
+
+export function StopBatchCompletions(arg1) {
+  return window['go']['backend_golang']['App']['StopBatchCompletions'](arg1);
 }
 
 export function Unzip(arg1, arg2) {

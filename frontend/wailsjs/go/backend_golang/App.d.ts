@@ -102,11 +102,15 @@ export function SaveFile(arg1:string,arg2:Array<number>):Promise<void>;
 
 export function SaveJson(arg1:string,arg2:any):Promise<void>;
 
+export function StartBatchCompletions(arg1:backend_golang.BatchCompletionRequest):Promise<string>;
+
 export function StartFile(arg1:string):Promise<void>;
 
 export function StartServer(arg1:string,arg2:number,arg3:string,arg4:boolean,arg5:boolean,arg6:boolean,arg7:boolean):Promise<string>;
 
 export function StartWebGPUServer(arg1:number,arg2:string):Promise<string>;
+
+export function StopBatchCompletions(arg1:string):Promise<void>;
 
 export function Unzip(arg1:string,arg2:string):Promise<void>;
 
