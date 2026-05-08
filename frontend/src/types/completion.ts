@@ -16,3 +16,17 @@ export type CompletionPreset = {
   prompt: string
   params: CompletionParams
 }
+
+export type BatchCompletionStatus =
+  | 'pending'
+  | 'running'
+  | 'done'
+  | 'error'
+  | 'aborted'
+
+export type BatchCompletionItem = {
+  id: number
+  status: BatchCompletionStatus
+  text: string
+  error?: string
+}

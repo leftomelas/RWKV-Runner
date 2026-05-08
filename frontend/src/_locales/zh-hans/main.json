@@ -403,5 +403,16 @@
   "Select the Running Mode of llama.cpp": "选择llama.cpp的运行模式",
   "Context Size": "上下文尺寸",
   "Remember the Full Client State": "完全记忆客户端状态",
-  "Please select a gguf file directly to use llama.cpp": "请直接选择gguf格式的文件以使用llama.cpp"
+  "Please select a gguf file directly to use llama.cpp": "请直接选择gguf格式的文件以使用llama.cpp",
+  "Batch Generation": "批量生成",
+  "Batch Count": "批量数量",
+  "Number of concurrent completion requests to start.": "一次性发起的并发续写请求数量。",
+  "Start Batch Generation": "开始批量生成",
+  "Stop Batch Generation": "停止批量生成",
+  "Generating": "生成中",
+  "pending": "等待中",
+  "running": "生成中",
+  "done": "生成完",
+  "error": "错误",
+  "aborted": "已停止"
 }

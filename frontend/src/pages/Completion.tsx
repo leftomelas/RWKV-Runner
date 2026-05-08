@@ -12,6 +12,13 @@ import { fetchEventSource } from '@microsoft/fetch-event-source'
 import { observer } from 'mobx-react-lite'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'react-toastify'
+import {
+  StartBatchCompletions,
+  StopBatchCompletions,
+} from '../../wailsjs/go/backend_golang/App'
+import { backend_golang } from '../../wailsjs/go/models'
+import { EventsOn } from '../../wailsjs/runtime'
+import { BatchCompletionOverlay } from '../components/BatchCompletionOverlay'
 import { DialogButton } from '../components/DialogButton'
 import { Labeled } from '../components/Labeled'
 import { ToolTipButton } from '../components/ToolTipButton'
@@ -19,11 +26,13 @@ import { ValuedSlider } from '../components/ValuedSlider'
 import { WorkHeader } from '../components/WorkHeader'
 import commonStore, { ModelStatus } from '../stores/commonStore'
 import {
+  BatchCompletionItem,
+  BatchCompletionStatus,
   CompletionParams,
   CompletionPreset,
   StopItem,
 } from '../types/completion'
-import { getReqUrl, smartScrollHeight } from '../utils'
+import { getReqUrl, getServerRoot, smartScrollHeight } from '../utils'
 import { defaultPenaltyDecay, defaultPresets } from './defaultConfigs'
 import { PresetsButton } from './PresetsManager/PresetsButton'
 
@@ -48,6 +57,39 @@ const normalizeStopItems = (params: CompletionParams): StopItem[] => {
     return [{ type: 'text', value: legacyStop.trim() }]
   }
   return []
+}
+
+const buildCompletionBody = (
+  prompt: string,
+  params: CompletionParams,
+  stopItems: StopItem[],
+  model: string
+) => {
+  const stopSequences = stopItems
+    .filter((item) => item.type === 'text')
+    .map((item) => item.value.replaceAll('\\n', '\n'))
+    .filter((value) => value.length > 0)
+  const stopTokenIds = stopItems
+    .filter((item) => item.type === 'token')
+    .map((item) => Number.parseInt(item.value, 10))
+    .filter((value) => Number.isFinite(value) && value >= 0)
+
+  return {
+    prompt,
+    stream: true,
+    model,
+    max_tokens: params.maxResponseToken,
+    temperature: params.temperature,
+    top_p: params.topP,
+    presence_penalty: params.presencePenalty,
+    frequency_penalty: params.frequencyPenalty,
+    stop: stopSequences.length > 0 ? stopSequences : undefined,
+    stop_token_ids: stopTokenIds.length > 0 ? stopTokenIds : undefined,
+    penalty_decay:
+      !params.penaltyDecay || params.penaltyDecay === defaultPenaltyDecay
+        ? undefined
+        : params.penaltyDecay,
+  }
 }
 
 const StopTagInput: FC<{
@@ -171,7 +213,24 @@ const StopTagInput: FC<{
 const CompletionPanel: FC = observer(() => {
   const { t } = useTranslation()
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const batchIdRef = useRef<string | null>(null)
+  const batchStartingRef = useRef(false)
+  const batchStopRequestedRef = useRef(false)
   const port = commonStore.getCurrentModelConfig().apiParameters.apiPort
+  const [batchCount, setBatchCount] = useState(16)
+  const [batchId, setBatchId] = useState<string | null>(null)
+  const [batchStarting, setBatchStarting] = useState(false)
+  const [batchItems, setBatchItems] = useState<BatchCompletionItem[]>([])
+  const batchAvailable =
+    commonStore.platform !== 'web' &&
+    typeof (window as any).go?.backend_golang?.App?.StartBatchCompletions ===
+      'function'
+  const batchActive =
+    batchStarting ||
+    (batchId !== null &&
+      batchItems.some(
+        (item) => item.status === 'pending' || item.status === 'running'
+      ))
 
   const scrollToBottom = (force: boolean = false) => {
     const current = inputRef.current
@@ -225,6 +284,64 @@ const CompletionPanel: FC = observer(() => {
 
   const stopItems = useMemo(() => normalizeStopItems(params), [params])
 
+  useEffect(() => {
+    if (!batchAvailable) return
+
+    const acceptBatchId = (nextBatchId: string) => {
+      if (!batchIdRef.current && batchStartingRef.current) {
+        batchIdRef.current = nextBatchId
+        setBatchId(nextBatchId)
+      }
+      return batchIdRef.current === nextBatchId
+    }
+
+    const unregisterUpdate = EventsOn(
+      'batch-completion-update',
+      (payload: backend_golang.BatchCompletionUpdateEvent) => {
+        if (!payload?.batchId || !acceptBatchId(payload.batchId)) return
+
+        setBatchItems((current) => {
+          const next = current.slice()
+          for (const update of payload.updates || []) {
+            const item = next[update.itemId]
+            if (!item) continue
+            const status = update.status as BatchCompletionStatus
+            next[update.itemId] = {
+              ...item,
+              status,
+              text:
+                update.text !== undefined
+                  ? update.text
+                  : item.text + (update.delta || ''),
+              error: update.error || item.error,
+            }
+          }
+          return next
+        })
+      }
+    )
+
+    const unregisterFinished = EventsOn(
+      'batch-completion-finished',
+      (payload: backend_golang.BatchCompletionFinishedEvent) => {
+        if (!payload?.batchId || payload.batchId !== batchIdRef.current) return
+        batchIdRef.current = null
+        batchStartingRef.current = false
+        batchStopRequestedRef.current = false
+        setBatchId(null)
+        setBatchStarting(false)
+      }
+    )
+
+    return () => {
+      unregisterUpdate()
+      unregisterFinished()
+      if (batchIdRef.current) {
+        StopBatchCompletions(batchIdRef.current).catch(() => {})
+      }
+    }
+  }, [batchAvailable])
+
   // for old version data compatibility
   useEffect(() => {
     if (!Array.isArray(params.stopItems)) {
@@ -250,15 +367,6 @@ const CompletionPanel: FC = observer(() => {
 
     prompt += params.injectStart.replaceAll('\\n', '\n')
 
-    const stopSequences = stopItems
-      .filter((item) => item.type === 'text')
-      .map((item) => item.value.replaceAll('\\n', '\n'))
-      .filter((value) => value.length > 0)
-    const stopTokenIds = stopItems
-      .filter((item) => item.type === 'token')
-      .map((item) => Number.parseInt(item.value, 10))
-      .filter((value) => Number.isFinite(value) && value >= 0)
-
     let answer = ''
     let finished = false
     const finish = () => {
@@ -277,22 +385,14 @@ const CompletionPanel: FC = observer(() => {
           Authorization: `Bearer ${commonStore.settings.apiKey}`,
           ...headers,
         },
-        body: JSON.stringify({
-          prompt,
-          stream: true,
-          model: commonStore.settings.apiCompletionModelName, // 'text-davinci-003'
-          max_tokens: params.maxResponseToken,
-          temperature: params.temperature,
-          top_p: params.topP,
-          presence_penalty: params.presencePenalty,
-          frequency_penalty: params.frequencyPenalty,
-          stop: stopSequences.length > 0 ? stopSequences : undefined,
-          stop_token_ids: stopTokenIds.length > 0 ? stopTokenIds : undefined,
-          penalty_decay:
-            !params.penaltyDecay || params.penaltyDecay === defaultPenaltyDecay
-              ? undefined
-              : params.penaltyDecay,
-        }),
+        body: JSON.stringify(
+          buildCompletionBody(
+            prompt,
+            params,
+            stopItems,
+            commonStore.settings.apiCompletionModelName
+          )
+        ),
         signal: completionSseController?.signal,
         openWhenHidden: true,
         onmessage(e) {
@@ -359,17 +459,110 @@ const CompletionPanel: FC = observer(() => {
     )
   }
 
+  const stopBatch = async () => {
+    batchStopRequestedRef.current = true
+    const activeBatchId = batchIdRef.current
+    batchIdRef.current = null
+    batchStartingRef.current = false
+    setBatchId(null)
+    setBatchStarting(false)
+    setBatchItems((current) =>
+      current.map((item) =>
+        item.status === 'pending' || item.status === 'running'
+          ? { ...item, status: 'aborted' }
+          : item
+      )
+    )
+
+    if (activeBatchId) {
+      await StopBatchCompletions(activeBatchId).catch(() => {})
+    }
+  }
+
+  const startBatch = async () => {
+    if (batchActive) {
+      await stopBatch()
+      return
+    }
+    if (
+      commonStore.status.status === ModelStatus.Offline &&
+      !commonStore.settings.apiUrl &&
+      commonStore.platform !== 'web'
+    ) {
+      toast(
+        t('Please click the button in the top right corner to start the model'),
+        { type: 'warning' }
+      )
+      return
+    }
+
+    const count = Math.max(1, Math.min(1000, Math.round(batchCount)))
+    setBatchCount(count)
+    const requestPrompt = prompt + params.injectStart.replaceAll('\\n', '\n')
+    const url = getServerRoot(port, true) + '/v1/completions'
+    const headers: Record<string, string> = {}
+    if (commonStore.settings.apiKey) {
+      headers.Authorization = `Bearer ${commonStore.settings.apiKey}`
+    }
+    const items = Array.from({ length: count }, (_, id) => ({
+      id,
+      status: 'pending' as const,
+      text: '',
+    }))
+
+    batchIdRef.current = null
+    batchStartingRef.current = true
+    batchStopRequestedRef.current = false
+    setBatchItems(items)
+    setBatchId(null)
+    setBatchStarting(true)
+
+    try {
+      const nextBatchId = await StartBatchCompletions({
+        url,
+        headers,
+        count,
+        body: buildCompletionBody(
+          requestPrompt,
+          params,
+          stopItems,
+          commonStore.settings.apiCompletionModelName
+        ),
+      })
+      batchIdRef.current = nextBatchId
+      setBatchId(nextBatchId)
+      if (batchStopRequestedRef.current) {
+        await stopBatch()
+      }
+    } catch (error) {
+      toast(String(error), { type: 'error' })
+      setBatchItems((current) =>
+        current.map((item) => ({
+          ...item,
+          status: 'error',
+          error: String(error),
+        }))
+      )
+    } finally {
+      batchStartingRef.current = false
+      setBatchStarting(false)
+    }
+  }
+
   return (
     <div className="flex grow flex-col gap-2 overflow-hidden sm:flex-row">
-      <Textarea
-        ref={inputRef}
-        className="grow"
-        value={prompt}
-        onChange={(e) => {
-          commonStore.setCompletionSubmittedPrompt(e.target.value)
-          setPrompt(e.target.value)
-        }}
-      />
+      <div className="relative min-h-0 grow overflow-hidden">
+        <Textarea
+          ref={inputRef}
+          className="h-full w-full"
+          value={prompt}
+          onChange={(e) => {
+            commonStore.setCompletionSubmittedPrompt(e.target.value)
+            setPrompt(e.target.value)
+          }}
+        />
+        {batchAvailable && <BatchCompletionOverlay items={batchItems} />}
+      </div>
       <div className="flex max-h-48 flex-col gap-1 sm:max-h-full sm:w-[250px] sm:min-w-[250px] sm:max-w-[250px]">
         <div className="flex gap-2">
           <Dropdown
@@ -584,6 +777,26 @@ const CompletionPanel: FC = observer(() => {
           />
         </div>
         <div className="grow" />
+        {batchAvailable && (
+          <Labeled
+            flex
+            breakline
+            label={t('Batch Count')}
+            desc={t('Number of concurrent completion requests to start.')}
+            content={
+              <Input
+                type="number"
+                min={1}
+                max={1000}
+                value={String(batchCount)}
+                onChange={(_, data) => {
+                  const value = Number.parseInt(data.value, 10)
+                  setBatchCount(Number.isFinite(value) ? value : 1)
+                }}
+              />
+            }
+          />
+        )}
         <div className="hidden justify-between gap-2 sm:flex">
           <Button
             className="grow"
@@ -638,6 +851,16 @@ const CompletionPanel: FC = observer(() => {
             {!commonStore.completionGenerating ? t('Generate') : t('Stop')}
           </Button>
         </div>
+        {batchAvailable && (
+          <Button
+            appearance={batchActive ? 'secondary' : 'primary'}
+            onClick={startBatch}
+          >
+            {batchActive
+              ? t('Stop Batch Generation')
+              : t('Start Batch Generation')}
+          </Button>
+        )}
       </div>
     </div>
   )

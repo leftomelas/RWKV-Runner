@@ -403,5 +403,16 @@
   "Select the Running Mode of llama.cpp": "llama.cppの実行モードを選択",
   "Context Size": "コンテキストサイズ",
   "Remember the Full Client State": "完全なクライアント状態を記憶",
-  "Please select a gguf file directly to use llama.cpp": "llama.cppを使用するにはggufファイルを直接選択してください"
+  "Please select a gguf file directly to use llama.cpp": "llama.cppを使用するにはggufファイルを直接選択してください",
+  "Batch Generation": "一括生成",
+  "Batch Count": "一括数量",
+  "Number of concurrent completion requests to start.": "一度に開始する並行補完リクエスト数。",
+  "Start Batch Generation": "一括生成を開始",
+  "Stop Batch Generation": "一括生成を停止",
+  "Generating": "生成中",
+  "pending": "待機中",
+  "running": "生成中",
+  "done": "生成完了",
+  "error": "エラー",
+  "aborted": "停止済み"
 }
