@@ -285,4 +285,4 @@ if __name__ == "__main__":
             f"state_{i}",
             [torch.rand(int(33.5 * 1024 * 1024) // 2, dtype=torch.float16)],
         )
-        print(f"已使用内存: {(psutil.Process().memory_info().rss - mem_before) / 1024 / 1024:.2f} MB")
+        print(f"Memory used: {(psutil.Process().memory_info().rss - mem_before) / 1024 / 1024:.2f} MB")

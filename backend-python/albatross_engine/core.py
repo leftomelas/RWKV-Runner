@@ -209,16 +209,16 @@ class AsyncEngineCore:
                         if message_type == "worker_loaded" and payload.get("status") == "success":
                             loaded_workers.add(worker_id)
                         else:
-                            print(f"Worker {worker_id} 加载失败: {payload}")
+                            print(f"Worker {worker_id} failed to load: {payload}")
                             raise RuntimeError(f"Worker {worker_id} failed to load")
                     except asyncio.TimeoutError:
                         timeout -= 1
 
                 if len(loaded_workers) < worker_num:
                     failed_workers = self.worker_id_set - loaded_workers
-                    raise RuntimeError(f"以下 worker 加载超时: {failed_workers}")
+                    raise RuntimeError(f"Workers failed to load before timeout: {failed_workers}")
 
-                print(f"所有 {worker_num} 个 worker 加载完成")
+                print(f"All {worker_num} workers loaded")
             finally:
                 pass
 

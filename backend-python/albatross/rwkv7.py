@@ -202,7 +202,7 @@ class RWKV_x070(MyModule):
             if kk[0] == 'blocks':
                 max_layer = max(max_layer, int(kk[1]))
         args.n_layer = max_layer + 1
-        print(args)
+        print(f"Albatross model config: {args}")
         self.n_layer, self.n_embd = args.n_layer, args.n_embd
 
         # z['emb.weight'] = F.layer_norm(z['emb.weight'], (args.n_embd,), weight=z['blocks.0.ln0.weight'], bias=z['blocks.0.ln0.bias'])

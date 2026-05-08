@@ -80,9 +80,9 @@ def min_swaps_to_target_fast(lst, elements: list[int]):
     return swaps, offsets
 
 
-# 全局模型编译锁，防止多线程同时编译 Torch JIT 模型
-_MODEL_COMPILE_LOCK = threading.Lock()
-_MODEL_COMPILE_DONE = False
+# Global model initialization lock. Avoid initializing TorchScript/model state concurrently.
+_MODEL_INIT_LOCK = threading.Lock()
+_MODEL_INIT_DONE = False
 
 
 class StateCategory(IntEnum):
@@ -200,18 +200,18 @@ class Worker:
                 },
             )
             self.worker_event_queue.put_nowait(message)
-            print(f"[{self.worker_id}] 发送加载成功信息")
+            print(f"[{self.worker_id}] Worker loaded event sent")
         except Exception as e:
-            print(f"[{self.worker_id}] 发送加载信息失败: {e}")
+            print(f"[{self.worker_id}] Failed to send worker loaded event: {e}")
 
     def _load_model(self):
         """加载模型"""
-        global _MODEL_COMPILE_LOCK, _MODEL_COMPILE_DONE
+        global _MODEL_INIT_LOCK, _MODEL_INIT_DONE
 
-        # 使用全局锁确保同一时间只有一个线程在进行模型编译
-        with _MODEL_COMPILE_LOCK:
-            # 如果模型已经编译完成，直接创建新实例
-            if _MODEL_COMPILE_DONE:
+        # Ensure only one worker performs the first model initialization path at a time.
+        with _MODEL_INIT_LOCK:
+            # After the first initialization path, create a new model instance directly.
+            if _MODEL_INIT_DONE:
                 args = types.SimpleNamespace()
                 args.vocab_size = self.model_config.vocab_size
                 args.head_size = self.model_config.head_size
@@ -227,8 +227,8 @@ class Worker:
                 self._send_worker_loaded_message()
                 return
 
-            # 第一次加载模型，需要进行 JIT 编译
-            print(f"[{self.worker_id}] 开始编译模型，请稍候...")
+            # First load initializes model weights, TorchScript wrappers, tokenizer, and CUDA context.
+            print(f"[{self.worker_id}] Loading and initializing model...")
             try:
                 args = types.SimpleNamespace()
                 args.vocab_size = self.model_config.vocab_size
@@ -241,15 +241,15 @@ class Worker:
                 self.model = RWKV_x070(args)
                 self.tokenizer = TRIE_TOKENIZER(self.model_config.vocab_path)
 
-                # 标记编译完成
-                _MODEL_COMPILE_DONE = True
-                print(f"[{self.worker_id}] 模型编译完成")
+                # Mark the one-time model initialization path as complete.
+                _MODEL_INIT_DONE = True
+                print(f"[{self.worker_id}] Model initialization complete")
 
                 # 发送成功加载信息
                 self._send_worker_loaded_message()
 
             except Exception as e:
-                print(f"[{self.worker_id}] 模型编译失败: {e}")
+                print(f"[{self.worker_id}] Model initialization failed: {e}")
                 raise
 
     def _init_worker(self):
