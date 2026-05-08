@@ -52,6 +52,8 @@ import { ValuedSlider } from '../components/ValuedSlider'
 import commonStore from '../stores/commonStore'
 import {
   ApiParameters,
+  defaultAlbatrossBatch,
+  defaultAlbatrossWorkers,
   Device,
   GGUFMode,
   ModelParameters,
@@ -115,6 +117,8 @@ const Configs: FC = observer(() => {
   const navigate = useNavigate()
   const port = selectedConfig.apiParameters.apiPort
   const usingGGUF = selectedConfig.modelParameters.modelName.endsWith('.gguf')
+  const usingAlbatross =
+    selectedConfig.modelParameters.device === 'CUDA High Performance'
 
   useEffect(() => {
     if (advancedHeaderRef1.current)
@@ -638,6 +642,19 @@ const Configs: FC = observer(() => {
                             } else {
                               setSelectedConfigModelParams({
                                 device: data.optionValue as Device,
+                                ...(data.optionValue === 'CUDA High Performance'
+                                  ? {
+                                      precision: 'fp16',
+                                      albatrossWorkers:
+                                        selectedConfig.modelParameters
+                                          .albatrossWorkers ||
+                                        defaultAlbatrossWorkers,
+                                      albatrossBatch:
+                                        selectedConfig.modelParameters
+                                          .albatrossBatch ||
+                                        defaultAlbatrossBatch,
+                                    }
+                                  : {}),
                               })
                             }
                           }
@@ -661,7 +678,8 @@ const Configs: FC = observer(() => {
                     }
                   />
                   {!usingGGUF &&
-                    selectedConfig.modelParameters.device !== 'Custom' && (
+                    selectedConfig.modelParameters.device !== 'Custom' &&
+                    !usingAlbatross && (
                       <Labeled
                         label={t('Precision')}
                         desc={t(
@@ -702,19 +720,73 @@ const Configs: FC = observer(() => {
                         }
                       />
                     )}
+                  {!usingGGUF && usingAlbatross && (
+                    <Labeled
+                      label={t('Albatross Workers')}
+                      desc={t(
+                        'Number of Albatross decode workers. Use 1 for the current single-GPU high-throughput path.'
+                      )}
+                      content={
+                        <NumberInput
+                          value={
+                            selectedConfig.modelParameters.albatrossWorkers ||
+                            defaultAlbatrossWorkers
+                          }
+                          min={1}
+                          max={8}
+                          step={1}
+                          toFixed={0}
+                          onChange={(e, data) => {
+                            setSelectedConfigModelParams({
+                              albatrossWorkers: data.value,
+                            })
+                          }}
+                        />
+                      }
+                    />
+                  )}
+                  {!usingGGUF && usingAlbatross && (
+                    <Labeled
+                      label={t('Albatross Batch')}
+                      desc={t(
+                        'Maximum active Albatross request batch. Higher values improve throughput when many requests run concurrently and use more VRAM.'
+                      )}
+                      content={
+                        <NumberInput
+                          value={
+                            selectedConfig.modelParameters.albatrossBatch ||
+                            defaultAlbatrossBatch
+                          }
+                          min={1}
+                          max={4096}
+                          step={32}
+                          toFixed={0}
+                          onChange={(e, data) => {
+                            setSelectedConfigModelParams({
+                              albatrossBatch: data.value,
+                            })
+                          }}
+                        />
+                      }
+                    />
+                  )}
                   {!usingGGUF &&
-                    selectedConfig.modelParameters.device.startsWith(
-                      'CUDA'
-                    ) && (
+                    selectedConfig.modelParameters.device.startsWith('CUDA') &&
+                    !usingAlbatross && (
                       <Labeled
                         label={t('Current Strategy')}
                         content={<Text> {getStrategy(selectedConfig)} </Text>}
                       />
                     )}
+                  {!usingGGUF && usingAlbatross && (
+                    <Labeled
+                      label={t('Current Strategy')}
+                      content={<Text> {getStrategy(selectedConfig)} </Text>}
+                    />
+                  )}
                   {!usingGGUF &&
-                    selectedConfig.modelParameters.device.startsWith(
-                      'CUDA'
-                    ) && (
+                    selectedConfig.modelParameters.device.startsWith('CUDA') &&
+                    !usingAlbatross && (
                       <Labeled
                         label={t('Stored Layers')}
                         desc={t(

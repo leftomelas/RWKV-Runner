@@ -16,22 +16,6 @@
       "python_abi": "cp310",
       "source": "local-build",
       "torch": "2.7.1+cu128"
-    },
-    {
-      "arch": [
-        "sm120"
-      ],
-      "capabilities": [
-        "rwkv7_forward",
-        "sampling"
-      ],
-      "cuda": "12.8",
-      "name": "rwkv7_state_fwd_fp16",
-      "path": "torch-2.7.1+cu128/win_amd64/cp310/sm120/rwkv7_state_fwd_fp16.pyd",
-      "platform": "win_amd64",
-      "python_abi": "cp310",
-      "source": "local-build",
-      "torch": "2.7.1+cu128"
     }
   ]
 }

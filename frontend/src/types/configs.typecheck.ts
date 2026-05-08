@@ -1,4 +1,9 @@
-import { Device, ModelConfig } from './configs'
+import {
+  defaultAlbatrossBatch,
+  defaultAlbatrossWorkers,
+  Device,
+  ModelConfig,
+} from './configs'
 
 const highPerformanceDevice: Device = 'CUDA High Performance'
 
@@ -18,6 +23,8 @@ const highPerformanceConfig: ModelConfig = {
     precision: 'fp16',
     storedLayers: 0,
     maxStoredLayers: 0,
+    albatrossWorkers: defaultAlbatrossWorkers,
+    albatrossBatch: defaultAlbatrossBatch,
   },
 }
 

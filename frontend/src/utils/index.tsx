@@ -53,7 +53,12 @@ import {
   MidiMessage,
   tracksMinimalTotalTime,
 } from '../types/composition'
-import { ModelConfig, ModelParameters } from '../types/configs'
+import {
+  defaultAlbatrossBatch,
+  defaultAlbatrossWorkers,
+  ModelConfig,
+  ModelParameters,
+} from '../types/configs'
 import { DownloadStatus } from '../types/downloads'
 import { ModelSourceItem } from '../types/models'
 import { Preset } from '../types/presets'
@@ -306,7 +311,9 @@ export const getStrategy = (
       else strategy += ` -> cuda fp16 *1`
       break
     case 'CUDA High Performance':
-      strategy = 'albatross workers=1 batch=32'
+      strategy = `albatross workers=${
+        params.albatrossWorkers || defaultAlbatrossWorkers
+      } batch=${params.albatrossBatch || defaultAlbatrossBatch}`
       break
     case 'MPS':
       if (avoidOverflow) strategy = 'mps fp32 *1 -> '

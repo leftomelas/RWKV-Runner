@@ -9,6 +9,9 @@ export type ApiParameters = {
   globalPenalty?: boolean
   stateModel?: string
 }
+export const defaultAlbatrossWorkers = 1
+export const defaultAlbatrossBatch = 960
+
 export type Device =
   | 'CPU'
   | 'CPU (rwkv.cpp)'
@@ -32,6 +35,8 @@ export type ModelParameters = {
   tokenChunkSize?: number
   useCustomCuda?: boolean
   customStrategy?: string
+  albatrossWorkers?: number
+  albatrossBatch?: number
   useCustomTokenizer?: boolean
   customTokenizer?: string
   ggufMode?: GGUFMode
