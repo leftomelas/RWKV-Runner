@@ -16,8 +16,6 @@ import {
   StartBatchCompletions,
   StopBatchCompletions,
 } from '../../wailsjs/go/backend_golang/App'
-import { backend_golang } from '../../wailsjs/go/models'
-import { EventsOn } from '../../wailsjs/runtime'
 import { BatchCompletionOverlay } from '../components/BatchCompletionOverlay'
 import { DialogButton } from '../components/DialogButton'
 import { Labeled } from '../components/Labeled'
@@ -26,8 +24,6 @@ import { ValuedSlider } from '../components/ValuedSlider'
 import { WorkHeader } from '../components/WorkHeader'
 import commonStore, { ModelStatus } from '../stores/commonStore'
 import {
-  BatchCompletionItem,
-  BatchCompletionStatus,
   CompletionParams,
   CompletionPreset,
   StopItem,
@@ -213,22 +209,15 @@ const StopTagInput: FC<{
 const CompletionPanel: FC = observer(() => {
   const { t } = useTranslation()
   const inputRef = useRef<HTMLTextAreaElement>(null)
-  const batchIdRef = useRef<string | null>(null)
-  const batchStartingRef = useRef(false)
-  const batchStopRequestedRef = useRef(false)
   const port = commonStore.getCurrentModelConfig().apiParameters.apiPort
-  const [batchCount, setBatchCount] = useState(16)
-  const [batchId, setBatchId] = useState<string | null>(null)
-  const [batchStarting, setBatchStarting] = useState(false)
-  const [batchItems, setBatchItems] = useState<BatchCompletionItem[]>([])
   const batchAvailable =
     commonStore.platform !== 'web' &&
     typeof (window as any).go?.backend_golang?.App?.StartBatchCompletions ===
       'function'
   const batchActive =
-    batchStarting ||
-    (batchId !== null &&
-      batchItems.some(
+    commonStore.completionBatchStarting ||
+    (commonStore.completionBatchId !== null &&
+      commonStore.completionBatchItems.some(
         (item) => item.status === 'pending' || item.status === 'running'
       ))
 
@@ -283,64 +272,6 @@ const CompletionPanel: FC = observer(() => {
   }
 
   const stopItems = useMemo(() => normalizeStopItems(params), [params])
-
-  useEffect(() => {
-    if (!batchAvailable) return
-
-    const acceptBatchId = (nextBatchId: string) => {
-      if (!batchIdRef.current && batchStartingRef.current) {
-        batchIdRef.current = nextBatchId
-        setBatchId(nextBatchId)
-      }
-      return batchIdRef.current === nextBatchId
-    }
-
-    const unregisterUpdate = EventsOn(
-      'batch-completion-update',
-      (payload: backend_golang.BatchCompletionUpdateEvent) => {
-        if (!payload?.batchId || !acceptBatchId(payload.batchId)) return
-
-        setBatchItems((current) => {
-          const next = current.slice()
-          for (const update of payload.updates || []) {
-            const item = next[update.itemId]
-            if (!item) continue
-            const status = update.status as BatchCompletionStatus
-            next[update.itemId] = {
-              ...item,
-              status,
-              text:
-                update.text !== undefined
-                  ? update.text
-                  : item.text + (update.delta || ''),
-              error: update.error || item.error,
-            }
-          }
-          return next
-        })
-      }
-    )
-
-    const unregisterFinished = EventsOn(
-      'batch-completion-finished',
-      (payload: backend_golang.BatchCompletionFinishedEvent) => {
-        if (!payload?.batchId || payload.batchId !== batchIdRef.current) return
-        batchIdRef.current = null
-        batchStartingRef.current = false
-        batchStopRequestedRef.current = false
-        setBatchId(null)
-        setBatchStarting(false)
-      }
-    )
-
-    return () => {
-      unregisterUpdate()
-      unregisterFinished()
-      if (batchIdRef.current) {
-        StopBatchCompletions(batchIdRef.current).catch(() => {})
-      }
-    }
-  }, [batchAvailable])
 
   // for old version data compatibility
   useEffect(() => {
@@ -460,14 +391,12 @@ const CompletionPanel: FC = observer(() => {
   }
 
   const stopBatch = async () => {
-    batchStopRequestedRef.current = true
-    const activeBatchId = batchIdRef.current
-    batchIdRef.current = null
-    batchStartingRef.current = false
-    setBatchId(null)
-    setBatchStarting(false)
-    setBatchItems((current) =>
-      current.map((item) =>
+    commonStore.setCompletionBatchStopRequested(true)
+    const activeBatchId = commonStore.completionBatchId
+    commonStore.setCompletionBatchId(null)
+    commonStore.setCompletionBatchStarting(false)
+    commonStore.setCompletionBatchItems(
+      commonStore.completionBatchItems.map((item) =>
         item.status === 'pending' || item.status === 'running'
           ? { ...item, status: 'aborted' }
           : item
@@ -496,8 +425,11 @@ const CompletionPanel: FC = observer(() => {
       return
     }
 
-    const count = Math.max(1, Math.min(1000, Math.round(batchCount)))
-    setBatchCount(count)
+    const count = Math.max(
+      1,
+      Math.min(1000, Math.round(commonStore.completionBatchCount))
+    )
+    commonStore.setCompletionBatchCount(count)
     const requestPrompt = prompt + params.injectStart.replaceAll('\\n', '\n')
     const url = getServerRoot(port, true) + '/v1/completions'
     const headers: Record<string, string> = {}
@@ -510,12 +442,10 @@ const CompletionPanel: FC = observer(() => {
       text: '',
     }))
 
-    batchIdRef.current = null
-    batchStartingRef.current = true
-    batchStopRequestedRef.current = false
-    setBatchItems(items)
-    setBatchId(null)
-    setBatchStarting(true)
+    commonStore.setCompletionBatchId(null)
+    commonStore.setCompletionBatchStarting(true)
+    commonStore.setCompletionBatchStopRequested(false)
+    commonStore.setCompletionBatchItems(items)
 
     try {
       const nextBatchId = await StartBatchCompletions({
@@ -529,23 +459,21 @@ const CompletionPanel: FC = observer(() => {
           commonStore.settings.apiCompletionModelName
         ),
       })
-      batchIdRef.current = nextBatchId
-      setBatchId(nextBatchId)
-      if (batchStopRequestedRef.current) {
+      commonStore.setCompletionBatchId(nextBatchId)
+      if (commonStore.completionBatchStopRequested) {
         await stopBatch()
       }
     } catch (error) {
       toast(String(error), { type: 'error' })
-      setBatchItems((current) =>
-        current.map((item) => ({
+      commonStore.setCompletionBatchItems(
+        commonStore.completionBatchItems.map((item) => ({
           ...item,
           status: 'error',
           error: String(error),
         }))
       )
     } finally {
-      batchStartingRef.current = false
-      setBatchStarting(false)
+      commonStore.setCompletionBatchStarting(false)
     }
   }
 
@@ -561,7 +489,9 @@ const CompletionPanel: FC = observer(() => {
             setPrompt(e.target.value)
           }}
         />
-        {batchAvailable && <BatchCompletionOverlay items={batchItems} />}
+        {batchAvailable && (
+          <BatchCompletionOverlay items={commonStore.completionBatchItems} />
+        )}
       </div>
       <div className="flex max-h-48 flex-col gap-1 sm:max-h-full sm:w-[250px] sm:min-w-[250px] sm:max-w-[250px]">
         <div className="flex gap-2">
@@ -777,26 +707,6 @@ const CompletionPanel: FC = observer(() => {
           />
         </div>
         <div className="grow" />
-        {batchAvailable && (
-          <Labeled
-            flex
-            breakline
-            label={t('Batch Count')}
-            desc={t('Number of concurrent completion requests to start.')}
-            content={
-              <Input
-                type="number"
-                min={1}
-                max={1000}
-                value={String(batchCount)}
-                onChange={(_, data) => {
-                  const value = Number.parseInt(data.value, 10)
-                  setBatchCount(Number.isFinite(value) ? value : 1)
-                }}
-              />
-            }
-          />
-        )}
         <div className="hidden justify-between gap-2 sm:flex">
           <Button
             className="grow"
@@ -852,14 +762,38 @@ const CompletionPanel: FC = observer(() => {
           </Button>
         </div>
         {batchAvailable && (
-          <Button
-            appearance={batchActive ? 'secondary' : 'primary'}
-            onClick={startBatch}
-          >
-            {batchActive
-              ? t('Stop Batch Generation')
-              : t('Start Batch Generation')}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Tooltip
+              content={String(
+                t('Number of concurrent completion requests to start.')
+              )}
+              relationship="label"
+            >
+              <Input
+                className="min-w-20 w-20"
+                aria-label={String(t('Batch Count'))}
+                type="number"
+                min={1}
+                max={1000}
+                value={String(commonStore.completionBatchCount)}
+                onChange={(_, data) => {
+                  const value = Number.parseInt(data.value, 10)
+                  commonStore.setCompletionBatchCount(
+                    Number.isFinite(value) ? value : 1
+                  )
+                }}
+              />
+            </Tooltip>
+            <Button
+              className="grow"
+              appearance={batchActive ? 'secondary' : 'primary'}
+              onClick={startBatch}
+            >
+              {batchActive
+                ? t('Stop Batch Generation')
+                : t('Start Batch Generation')}
+            </Button>
+          </div>
         )}
       </div>
     </div>

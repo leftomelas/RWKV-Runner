@@ -23,6 +23,7 @@ import commonStore, {
   MonitorData,
   Platform,
 } from './stores/commonStore'
+import { BatchCompletionUpdateEvent } from './types/completion'
 import { MidiMessage, MidiPort } from './types/composition'
 import { Preset } from './types/presets'
 import {
@@ -68,6 +69,12 @@ export async function startup() {
     EventsOn('wslerr', (e) => {
       console.log(e)
     })
+    EventsOn('batch-completion-update', (payload: BatchCompletionUpdateEvent) =>
+      commonStore.applyCompletionBatchUpdate(payload)
+    )
+    EventsOn('batch-completion-finished', (payload: { batchId: string }) =>
+      commonStore.finishCompletionBatch(payload?.batchId)
+    )
     initLocalModelsNotify()
     initLoraModels()
     initStateModels()

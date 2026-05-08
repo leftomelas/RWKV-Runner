@@ -12,7 +12,11 @@ import {
 } from '../pages/defaultConfigs'
 import { AboutContent } from '../types/about'
 import { Attachment, ChatParams, Conversation } from '../types/chat'
-import { CompletionPreset } from '../types/completion'
+import {
+  BatchCompletionItem,
+  BatchCompletionUpdateEvent,
+  CompletionPreset,
+} from '../types/completion'
 import {
   CompositionParams,
   InstrumentType,
@@ -139,6 +143,11 @@ class CommonStore {
   completionPreset: CompletionPreset | null = null
   completionGenerating: boolean = false
   completionSubmittedPrompt: string = ''
+  completionBatchCount: number = 16
+  completionBatchId: string | null = null
+  completionBatchStarting: boolean = false
+  completionBatchStopRequested: boolean = false
+  completionBatchItems: BatchCompletionItem[] = []
   // composition
   compositionParams: CompositionParams = {
     prompt: defaultCompositionPrompt,
@@ -395,6 +404,57 @@ class CommonStore {
 
   setCompletionGenerating(value: boolean) {
     this.completionGenerating = value
+  }
+
+  setCompletionBatchCount(value: number) {
+    this.completionBatchCount = value
+  }
+
+  setCompletionBatchId(value: string | null) {
+    this.completionBatchId = value
+  }
+
+  setCompletionBatchStarting(value: boolean) {
+    this.completionBatchStarting = value
+  }
+
+  setCompletionBatchStopRequested(value: boolean) {
+    this.completionBatchStopRequested = value
+  }
+
+  setCompletionBatchItems(value: BatchCompletionItem[]) {
+    this.completionBatchItems = value
+  }
+
+  applyCompletionBatchUpdate(payload: BatchCompletionUpdateEvent) {
+    if (!payload?.batchId) return
+    if (!this.completionBatchId && this.completionBatchStarting) {
+      this.completionBatchId = payload.batchId
+    }
+    if (payload.batchId !== this.completionBatchId) return
+
+    const next = this.completionBatchItems.slice()
+    for (const update of payload.updates || []) {
+      const item = next[update.itemId]
+      if (!item) continue
+      next[update.itemId] = {
+        ...item,
+        status: update.status,
+        text:
+          update.text !== undefined
+            ? update.text
+            : item.text + (update.delta || ''),
+        error: update.error || item.error,
+      }
+    }
+    this.completionBatchItems = next
+  }
+
+  finishCompletionBatch(batchId: string) {
+    if (!batchId || batchId !== this.completionBatchId) return
+    this.completionBatchId = null
+    this.completionBatchStarting = false
+    this.completionBatchStopRequested = false
   }
 
   setMonitorData(value: MonitorData) {

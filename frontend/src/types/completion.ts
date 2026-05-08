@@ -30,3 +30,16 @@ export type BatchCompletionItem = {
   text: string
   error?: string
 }
+
+export type BatchCompletionUpdate = {
+  itemId: number
+  status: BatchCompletionStatus
+  delta?: string
+  text?: string
+  error?: string
+}
+
+export type BatchCompletionUpdateEvent = {
+  batchId: string
+  updates: BatchCompletionUpdate[]
+}
