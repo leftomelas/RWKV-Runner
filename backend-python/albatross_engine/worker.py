@@ -12,6 +12,7 @@ from collections import deque
 from albatross_engine.task import Task, ModelLoadConfig, RequestStatus, FinishReason
 from albatross_engine.sampling import sample_next_tokens_batch
 from albatross_engine.profiling import ProfileAccumulator
+from albatross_engine.throughput import ThroughputReporter, get_log_interval_from_env
 # from albatross_engine.rapid_sampling_wrapper import load_rapid_sampling
 
 # 定义TaskData的类型结构
@@ -185,6 +186,10 @@ class Worker:
 
         self.loop_time_recorder = deque(maxlen=10)
         self.profile = ProfileAccumulator(enabled=os.environ.get("ALBATROSS_PROFILE") == "1")
+        self.throughput_reporter = ThroughputReporter(
+            worker_id=self.worker_id,
+            interval_seconds=get_log_interval_from_env(),
+        )
 
     def _send_worker_loaded_message(self):
         """发送 Worker 加载成功信息"""
@@ -853,8 +858,9 @@ class Worker:
                     self._organize_batch()
                 )
 
+            decode_count = max(0, decode_offset[1] - decode_offset[0])
             self.profile.add("worker_loops", 1)
-            self.profile.add("decode_tokens_scheduled", max(0, decode_offset[1] - decode_offset[0]))
+            self.profile.add("decode_tokens_scheduled", decode_count)
             self.profile.add("one_prefill_scheduled", max(0, one_prefill_offset[1] - one_prefill_offset[0]))
             self.profile.add("seq_prefill_scheduled", max(0, seq_perfill_offset[1] - seq_perfill_offset[0]))
 
@@ -867,6 +873,10 @@ class Worker:
             if one_forward_count > 0:
                 with self.profile.time("forward_one"):
                     self._run_forward_one(decode_offset, one_prefill_offset)
+                self.throughput_reporter.observe(
+                    decode_tokens=decode_count,
+                    active_batch=decode_count,
+                )
                 self.seq_forward_count_down -= 1
             else:
                 self.seq_forward_count_down = 0
@@ -879,7 +889,6 @@ class Worker:
             self.loop_time_recorder.append(time.perf_counter() - loop_start_time)
 
             if self.worker_event_queue:
-                decode_count = decode_offset[1] - decode_offset[0]
                 one_prefill_count = one_prefill_offset[1] - one_prefill_offset[0]
                 info = (
                     self.worker_id,
