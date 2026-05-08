@@ -776,7 +776,7 @@ const Configs: FC = observer(() => {
                           }
                           min={1}
                           max={4096}
-                          step={32}
+                          step={1}
                           toFixed={0}
                           onChange={(e, data) => {
                             setSelectedConfigModelParams({
